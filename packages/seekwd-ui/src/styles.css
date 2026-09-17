@@ -280,6 +280,7 @@
   .sk-sidebar-item { width: 100%; min-height: var(--sk-sidebar-row-height); display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border: 0; border-radius: 5px; color: var(--sk-text-secondary); background: transparent; font-family: var(--sk-font-sans); font-size: var(--sk-sidebar-font-size); line-height: 1.25; text-align: left; }
   .sk-sidebar-item:hover { background: color-mix(in srgb, var(--sk-text-primary) 6%, transparent); }
   .sk-sidebar-item.is-active { color: var(--sk-text-primary); background: var(--sk-bg-selected); }
+  .sk-sidebar-item.is-context-open { color: var(--sk-accent); }
   .sk-sidebar-item > span:first-child, .sk-sidebar-item svg { width: var(--sk-sidebar-icon-size); height: var(--sk-sidebar-icon-size); color: currentColor; }
   .sk-sidebar-item__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sk-sidebar-item__trailing { color: var(--sk-text-tertiary); font-size: 10px; }

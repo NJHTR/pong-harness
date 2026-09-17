@@ -7,24 +7,28 @@ import {
   CirclePlay,
   ArrowDownToLine,
   ArrowUpFromLine,
+  Blocks,
+  CalendarClock,
   Folder,
   FolderOpen,
   FolderPlus,
   Gauge,
+  LibraryBig,
   Minus,
   Moon,
   MoreHorizontal,
   PanelBottom,
   PanelRight,
+  PanelsTopLeft,
   Paperclip,
   Pause,
   Play,
   Plus,
   Search,
   Settings,
+  SquarePen,
   Sun,
   Type,
-  Workflow,
   X,
   Zap,
 } from "lucide-react";
@@ -95,6 +99,7 @@ function WorkbenchPreview() {
   const [draftWorkspace, setDraftWorkspace] = useState("");
   const [projectStarted, setProjectStarted] = useState(false);
   const [composerScopeEnabled, setComposerScopeEnabled] = useState(true);
+  const [nodeLibraryOpen, setNodeLibraryOpen] = useState(false);
 
   const createProject = () => {
     const nextName = draftProjectName.trim();
@@ -121,14 +126,14 @@ function WorkbenchPreview() {
         subtitle="Saved"
         toolbar={
           <Toolbar>
-            <Tooltip content="Add node"><IconButton label="Add node"><Plus /></IconButton></Tooltip>
+            <Tooltip content="Add node"><IconButton label="Add node" active={nodeLibraryOpen} onClick={() => setNodeLibraryOpen(!nodeLibraryOpen)}><Blocks /></IconButton></Tooltip>
             <Button variant="primary" size="small" leadingIcon={<Play />}>Run</Button>
             <ToolbarDivider />
             <Tooltip content="Toggle run panel"><IconButton label="Toggle run panel" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
             <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
           </Toolbar>
         }
-        sidebar={<WorkspaceNavigation workspaceName={workspaceName} projectName={projectName} onNewProject={openNewProject} />}
+        sidebar={<WorkspaceNavigation workspaceName={workspaceName} projectName={projectName} nodeLibraryOpen={nodeLibraryOpen} onNewProject={openNewProject} onOpenRuns={() => setBottomOpen(true)} onToggleNodeLibrary={() => setNodeLibraryOpen(!nodeLibraryOpen)} />}
         inspector={inspectorOpen ? <NodeInspector /> : undefined}
         bottomPanel={bottomOpen ? <RunPanel /> : undefined}
       >
@@ -142,6 +147,8 @@ function WorkbenchPreview() {
           onScopeEnable={() => setComposerScopeEnabled(true)}
           onStart={() => setProjectStarted(true)}
           onNewProject={openNewProject}
+          nodeLibraryOpen={nodeLibraryOpen}
+          onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
         />
       </WindowFrame>
       <Dialog
@@ -168,10 +175,25 @@ function WorkbenchPreview() {
   );
 }
 
-function WorkspaceNavigation({ workspaceName, projectName, onNewProject }: { workspaceName: string; projectName: string; onNewProject: () => void }) {
+interface WorkspaceNavigationProps {
+  workspaceName: string;
+  projectName: string;
+  nodeLibraryOpen: boolean;
+  onNewProject: () => void;
+  onOpenRuns: () => void;
+  onToggleNodeLibrary: () => void;
+}
+
+function WorkspaceNavigation({ workspaceName, projectName, nodeLibraryOpen, onNewProject, onOpenRuns, onToggleNodeLibrary }: WorkspaceNavigationProps) {
   const workspacePath = workspaceName === "Thesis Workspace" ? "D:\\Documents\\Thesis" : workspaceName === "Research Workspace" ? "D:\\Documents\\Research" : "D:\\bs\\seekwd\\OpenMAIC";
   return (
     <>
+      <nav className="sidebar-global" aria-label="Global">
+        <SidebarItem icon={<SquarePen />} onClick={onNewProject}>New Project</SidebarItem>
+        <SidebarItem icon={<CirclePlay />} trailing="1" onClick={onOpenRuns}>Runs</SidebarItem>
+        <SidebarItem icon={<CalendarClock />}>Automations</SidebarItem>
+        <SidebarItem icon={<Box />}>Extensions</SidebarItem>
+      </nav>
       <div className="workspace-title">
         <span className="workspace-title__copy">
           <span className="workspace-title__name"><FolderOpen /><strong>{workspaceName}</strong></span>
@@ -180,17 +202,16 @@ function WorkspaceNavigation({ workspaceName, projectName, onNewProject }: { wor
         <IconButton label="New project" size="small" onClick={onNewProject}><Plus /></IconButton>
       </div>
       <SidebarSection label="Workspace">
-        <SidebarGroup icon={<Workflow />} trailing="3" label="Canvases" defaultOpen>
-          <SidebarItem className="is-nested" icon={<Workflow />} active>{projectName}</SidebarItem>
-          <SidebarItem className="is-nested" icon={<Workflow />}>Source Analysis</SidebarItem>
-          <SidebarItem className="is-nested" icon={<Workflow />}>Citation Review</SidebarItem>
+        <SidebarGroup icon={<LibraryBig />} trailing="3" label="Canvases" defaultOpen>
+          <SidebarItem className="is-nested" icon={<PanelsTopLeft />} active>{projectName}</SidebarItem>
+          <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>Source Analysis</SidebarItem>
+          <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>Citation Review</SidebarItem>
         </SidebarGroup>
-        <SidebarItem icon={<CirclePlay />} trailing="1">Runs</SidebarItem>
+        <SidebarItem icon={<Blocks />} trailing="24" className={nodeLibraryOpen ? "is-context-open" : ""} onClick={onToggleNodeLibrary}>Node Library</SidebarItem>
         <SidebarItem icon={<Folder />} trailing="12">Files</SidebarItem>
       </SidebarSection>
       <SidebarSection label="Resources">
         <SidebarItem icon={<Gauge />}>Environments</SidebarItem>
-        <SidebarItem icon={<Box />}>Extensions</SidebarItem>
         <SidebarItem icon={<Bot />}>Agents</SidebarItem>
       </SidebarSection>
       <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
@@ -208,12 +229,20 @@ interface CanvasPreviewProps {
   onScopeEnable: () => void;
   onStart: () => void;
   onNewProject: () => void;
+  nodeLibraryOpen: boolean;
+  onCloseNodeLibrary: () => void;
 }
 
-function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewProject }: CanvasPreviewProps) {
+function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewProject, nodeLibraryOpen, onCloseNodeLibrary }: CanvasPreviewProps) {
+  const [addedNodes, setAddedNodes] = useState<string[]>([]);
+  const addNode = (nodeName: string) => {
+    setAddedNodes((nodes) => [...nodes, nodeName]);
+    onCloseNodeLibrary();
+  };
+
   return (
     <div className="canvas-preview">
-      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
+      <div className="canvas-tabbar"><div className="canvas-tab is-active"><PanelsTopLeft /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
       <div className="canvas-breadcrumb"><span>{workspaceName}</span><ChevronRight /><strong>{canvasTitle}</strong></div>
       <svg className="canvas-edges" aria-hidden="true" viewBox="0 0 900 480" preserveAspectRatio="none">
         <path d="M263 158 C330 158 320 195 385 195" />
@@ -222,6 +251,8 @@ function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnable
       <CanvasNode className="node-one" title="Research Topic" typeLabel="Text input" icon={<Type />} state="success" outputs={[{ id: "text", label: "Topic", kind: "data" }]} footer="128 chars" />
       <CanvasNode className="node-two" title="Draft Experiment Report" typeLabel="Agent task" icon={<Bot />} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data" }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data" }]} footer="Step 3 of 5" />
       <CanvasNode className="node-three" title="Review Report Structure" typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" />
+      {addedNodes.map((nodeName, index) => <AddedCanvasNode key={`${nodeName}-${index}`} name={nodeName} index={index} />)}
+      {nodeLibraryOpen ? <NodeLibrary onAdd={addNode} onClose={onCloseNodeLibrary} /> : null}
       <AgentComposer
         workspaceName={workspaceName}
         draftMode={!projectStarted}
@@ -234,6 +265,42 @@ function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnable
       />
       <div className="canvas-zoom"><button aria-label="Zoom out" title="Zoom out"><Minus /></button><span>100%</span><button aria-label="Zoom in" title="Zoom in"><Plus /></button></div>
     </div>
+  );
+}
+
+function AddedCanvasNode({ name, index }: { name: string; index: number }) {
+  const node = name === "Text Input"
+    ? { typeLabel: "Text input", icon: <Type />, inputs: [], outputs: [{ id: "text", label: "Text", kind: "data" as const }] }
+    : name === "File Input"
+      ? { typeLabel: "File input", icon: <FolderOpen />, inputs: [], outputs: [{ id: "file", label: "File", kind: "resource" as const }] }
+      : name === "Human Approval"
+        ? { typeLabel: "Human input", icon: <Pause />, inputs: [{ id: "request", label: "Request", kind: "data" as const }], outputs: [{ id: "approved", label: "Approved", kind: "event" as const }] }
+        : name === "Event Trigger"
+          ? { typeLabel: "Trigger", icon: <Zap />, inputs: [], outputs: [{ id: "event", label: "Event", kind: "event" as const }] }
+          : { typeLabel: "Agent task", icon: <Bot />, inputs: [{ id: "goal", label: "Goal", kind: "data" as const }], outputs: [{ id: "result", label: "Result", kind: "data" as const }] };
+  const position = { left: `${19 + (index % 3) * 22}%`, top: `${58 + Math.floor(index / 3) * 14}%` };
+  return <CanvasNode className="node-added" style={position} title={name} typeLabel={node.typeLabel} icon={node.icon} inputs={node.inputs} outputs={node.outputs} footer="Not configured" />;
+}
+
+function NodeLibrary({ onAdd, onClose }: { onAdd: (nodeName: string) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const nodes = [
+    { name: "Text Input", category: "Input", description: "Provide text or instructions", icon: <Type /> },
+    { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen /> },
+    { name: "Agent Task", category: "Intelligence", description: "Delegate an objective to an agent", icon: <Bot /> },
+    { name: "Human Approval", category: "Control", description: "Pause for a human decision", icon: <Pause /> },
+    { name: "Event Trigger", category: "Control", description: "Continue when an event occurs", icon: <Zap /> },
+  ].filter((node) => `${node.name} ${node.category}`.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <aside className="node-library" aria-label="Node Library">
+      <header><span><Blocks /><strong>Node Library</strong></span><IconButton label="Close node library" size="small" onClick={onClose}><X /></IconButton></header>
+      <div className="node-library__search"><TextField aria-label="Search nodes" leadingIcon={<Search />} placeholder="Search nodes" value={query} onChange={(event) => setQuery(event.target.value)} clearable /></div>
+      <div className="node-library__list">
+        {nodes.map((node) => <button type="button" key={node.name} draggable onClick={() => onAdd(node.name)}><span className="node-library__icon">{node.icon}</span><span><strong>{node.name}</strong><small>{node.description}</small></span><Plus aria-hidden="true" /></button>)}
+        {nodes.length === 0 ? <p>No matching nodes</p> : null}
+      </div>
+    </aside>
   );
 }
 

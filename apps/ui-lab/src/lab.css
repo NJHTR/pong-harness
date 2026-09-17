@@ -36,6 +36,9 @@ button, input, textarea { font-family: inherit; }
 .lab-window { width: min(1440px, 100%); height: calc(100vh - 94px); min-height: 620px; margin: 0 auto; }
 .lab-window.hide-inspector .sk-workbench { grid-template-columns: 212px minmax(280px, 1fr); }
 .workspace-title { height: 46px; padding: 4px 5px 8px 7px; display: grid; grid-template-columns: minmax(0, 1fr) 23px; align-items: center; gap: 6px; border-bottom: 1px solid var(--sk-divider); }
+.sidebar-global { padding: 0 0 8px; border-bottom: 1px solid var(--sk-divider); }
+.sidebar-global .sk-sidebar-item { min-height: 26px; }
+.sidebar-global + .workspace-title { margin-top: 8px; }
 .workspace-title__copy { min-width: 0; display: grid; gap: 2px; }
 .workspace-title__name { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .workspace-title__name svg { width: 15px; height: 15px; flex: 0 0 15px; color: var(--sk-accent); }
@@ -62,10 +65,31 @@ button, input, textarea { font-family: inherit; }
 .node-one { left: 4%; top: 24%; }
 .node-two { left: 37%; top: 34%; }
 .node-three { right: 4%; top: 45%; }
+.node-added { z-index: 3 !important; }
 .canvas-zoom { position: absolute; z-index: 5; right: 12px; bottom: 122px; height: 25px; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--sk-border); border-radius: 6px; background: var(--sk-bg-elevated); box-shadow: 0 2px 8px rgba(0,0,0,.12); font-size: 10px; }
+.canvas-preview:has(.agent-composer__scope-row) .canvas-zoom { bottom: 152px; }
 .canvas-zoom button { width: 25px; height: 25px; display: grid; place-items: center; border: 0; color: var(--sk-text-secondary); background: transparent; }
 .canvas-zoom button svg { width: 13px; height: 13px; }
 .canvas-zoom span { padding: 0 7px; border-inline: 1px solid var(--sk-divider); }
+
+.node-library { position: absolute; z-index: 7; top: 72px; bottom: 140px; left: 12px; width: 236px; display: grid; grid-template-rows: 34px auto minmax(0, 1fr); overflow: hidden; border: .5px solid var(--sk-border); border-radius: 8px; color: var(--sk-text-primary); background: color-mix(in srgb, var(--sk-bg-elevated) 87%, transparent); box-shadow: var(--sk-shadow-popover); backdrop-filter: blur(28px) saturate(145%); font-family: var(--sk-font-sans); }
+.node-library > header { min-height: 34px; padding: 0 5px 0 9px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--sk-divider); }
+.node-library > header > span { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.node-library > header > span svg { width: 14px; height: 14px; color: var(--sk-accent); }
+.node-library__search { padding: 8px; border-bottom: 1px solid var(--sk-divider); }
+.node-library__search .sk-field { width: 100%; }
+.node-library__search .sk-field__control { min-height: 24px; }
+.node-library__list { min-height: 0; padding: 5px; display: grid; align-content: start; gap: 2px; overflow: auto; }
+.node-library__list button { width: 100%; min-height: 43px; padding: 5px; display: grid; grid-template-columns: 25px minmax(0, 1fr) 13px; align-items: center; gap: 7px; border: 0; border-radius: 6px; color: var(--sk-text-primary); background: transparent; text-align: left; }
+.node-library__list button:hover { background: color-mix(in srgb, var(--sk-text-primary) 6%, transparent); }
+.node-library__list button:active { filter: brightness(.95); }
+.node-library__icon { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 5px; color: var(--sk-accent); background: var(--sk-accent-soft); }
+.node-library__icon svg { width: 14px; height: 14px; }
+.node-library__list button > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.node-library__list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 600; }
+.node-library__list small { overflow: hidden; color: var(--sk-text-tertiary); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+.node-library__list > button > svg { width: 13px; height: 13px; color: var(--sk-text-tertiary); }
+.node-library__list p { margin: 16px 8px; color: var(--sk-text-secondary); font-size: 10px; text-align: center; }
 
 .agent-composer { position: absolute; z-index: 8; left: 50%; bottom: 18px; width: min(640px, calc(100% - 40px)); color: var(--sk-text-primary); transform: translateX(-50%); font-family: var(--sk-font-sans); }
 .agent-composer__scope-row { position: relative; height: 30px; padding-left: 12px; display: flex; align-items: center; border: 1px solid var(--sk-border-subtle); border-bottom: 0; border-radius: 14px 14px 0 0; background: color-mix(in srgb, var(--sk-bg-elevated) 76%, transparent); backdrop-filter: blur(26px) saturate(145%); }

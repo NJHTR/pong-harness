@@ -114,6 +114,28 @@ Composer 分为两个阶段：
 - Workbench 和 Components 等顶层视图必须复用同一个 `SegmentedControl` 实例、位置、字号和选中态，不为单个页面重写外壳行为。
 - 状态和端口使用能说明含义的 SVG 图标。禁止“彩色点 + 文字”和无语义空心圆；方向相关端口必须区分输入和输出。
 
+### 侧边栏信息架构
+
+侧边栏是工作台的主要导航面，不是所有功能的平铺目录。按作用域分为三层：
+
+```text
+Global actions
+  New Project, Runs, Automations, Extensions
+
+Current Workspace
+  Canvases, Node Library, Files
+
+Workspace resources
+  Environments, Agents, Settings
+```
+
+- Global actions 跨项目有效，放在侧边栏顶部并与当前 Workspace 内容隔开。
+- `Runs` 是跨当前项目的运行历史入口；`Automations` 管理计划、触发与后台任务。只在接入仓库提供方后才显示 Pull Requests，不能把它当成所有 Workspace 的固定入口。
+- Canvas 集合使用 `LibraryBig`，单个 Canvas 使用 `PanelsTopLeft`，Node Library 使用 `Blocks`。三者必须视觉可区分，不能复用泛化的 workflow 图标。
+- Node Library 是当前 Canvas 的补充工具而非新的永久分栏。它通过侧栏入口或顶部 `Add node` 打开同一个可搜索面板。
+- 点击节点库条目会创建一个未配置节点并放入当前 Canvas；随后由 Inspector 或 Agent Composer 完成配置。真实运行时应将这个动作映射为 Graph Patch，而非仅改 UI 状态。
+- Node Library 打开时，当前 Canvas 仍是唯一带选中底色的导航项；节点库仅用图标颜色表示其上下文面板已打开。
+
 ## 运行状态表达
 
 - `idle`：中性就绪图标，仅说明可执行。
