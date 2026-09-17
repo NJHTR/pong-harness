@@ -1,19 +1,20 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   ArrowUp,
   Bot,
   Box,
   ChevronRight,
-  CirclePlay,
   ArrowDownToLine,
   ArrowUpFromLine,
   Blocks,
   CalendarClock,
+  CheckCircle2,
+  Clock3,
   Folder,
   FolderOpen,
   FolderPlus,
-  Gauge,
-  LibraryBig,
+  GitFork,
+  History,
   Minus,
   Moon,
   MoreHorizontal,
@@ -26,7 +27,7 @@ import {
   Plus,
   Search,
   Settings,
-  SquarePen,
+  TriangleAlert,
   Sun,
   Type,
   X,
@@ -47,7 +48,6 @@ import {
   PropertyRow,
   SegmentedControl,
   SidebarItem,
-  SidebarGroup,
   SidebarSection,
   StatusBadge,
   Switch,
@@ -90,32 +90,39 @@ export function App() {
 }
 
 function WorkbenchPreview() {
-  const [bottomOpen, setBottomOpen] = useState(true);
+  const [bottomOpen, setBottomOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [workspaceName, setWorkspaceName] = useState("Thesis Workspace");
-  const [projectName, setProjectName] = useState("Experiment Report");
-  const [newProjectOpen, setNewProjectOpen] = useState(false);
-  const [draftProjectName, setDraftProjectName] = useState("");
+  const [canvasName, setCanvasName] = useState("Experiment Report");
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  const [draftWorkspaceName, setDraftWorkspaceName] = useState("");
   const [draftWorkspace, setDraftWorkspace] = useState("");
-  const [projectStarted, setProjectStarted] = useState(false);
+  const [canvasStarted, setCanvasStarted] = useState(false);
   const [composerScopeEnabled, setComposerScopeEnabled] = useState(true);
   const [nodeLibraryOpen, setNodeLibraryOpen] = useState(false);
+  const [runHistoryOpen, setRunHistoryOpen] = useState(false);
 
-  const createProject = () => {
-    const nextName = draftProjectName.trim();
+  const createWorkspace = () => {
+    const nextName = draftWorkspaceName.trim();
     if (!nextName || !draftWorkspace) return;
-    setWorkspaceName(draftWorkspace);
-    setProjectName(nextName);
-    setDraftProjectName("");
-    setProjectStarted(false);
+    setWorkspaceName(nextName);
+    setCanvasName("Untitled Canvas");
+    setDraftWorkspaceName("");
+    setCanvasStarted(false);
     setComposerScopeEnabled(true);
-    setNewProjectOpen(false);
+    setNewWorkspaceOpen(false);
   };
 
-  const openNewProject = () => {
-    setDraftProjectName("");
+  const openNewWorkspace = () => {
+    setDraftWorkspaceName("");
     setDraftWorkspace("");
-    setNewProjectOpen(true);
+    setNewWorkspaceOpen(true);
+  };
+
+  const createCanvas = () => {
+    setCanvasName("Untitled Canvas");
+    setCanvasStarted(false);
+    setComposerScopeEnabled(true);
   };
 
   return (
@@ -127,46 +134,49 @@ function WorkbenchPreview() {
         toolbar={
           <Toolbar>
             <Tooltip content="Add node"><IconButton label="Add node" active={nodeLibraryOpen} onClick={() => setNodeLibraryOpen(!nodeLibraryOpen)}><Blocks /></IconButton></Tooltip>
-            <Button variant="primary" size="small" leadingIcon={<Play />}>Run</Button>
+            <Button variant="primary" size="small" leadingIcon={<Play />} onClick={() => setBottomOpen(true)}>Run</Button>
+            <Tooltip content="Run history"><IconButton label="Run history" active={runHistoryOpen} onClick={() => setRunHistoryOpen(!runHistoryOpen)}><History /></IconButton></Tooltip>
             <ToolbarDivider />
             <Tooltip content="Toggle run panel"><IconButton label="Toggle run panel" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
             <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
           </Toolbar>
         }
-        sidebar={<WorkspaceNavigation workspaceName={workspaceName} projectName={projectName} nodeLibraryOpen={nodeLibraryOpen} onNewProject={openNewProject} onOpenRuns={() => setBottomOpen(true)} onToggleNodeLibrary={() => setNodeLibraryOpen(!nodeLibraryOpen)} />}
+        sidebar={<WorkspaceNavigation workspaceName={workspaceName} canvasName={canvasName} onNewWorkspace={openNewWorkspace} onAddCanvas={createCanvas} onSelectCanvas={setCanvasName} />}
         inspector={inspectorOpen ? <NodeInspector /> : undefined}
         bottomPanel={bottomOpen ? <RunPanel /> : undefined}
       >
         <CanvasPreview
           workspaceName={workspaceName}
-          canvasTitle={projectName}
-          projectStarted={projectStarted}
+          canvasTitle={canvasName}
+          canvasStarted={canvasStarted}
           scopeEnabled={composerScopeEnabled}
           onWorkspaceChange={setWorkspaceName}
           onScopeClear={() => setComposerScopeEnabled(false)}
           onScopeEnable={() => setComposerScopeEnabled(true)}
-          onStart={() => setProjectStarted(true)}
-          onNewProject={openNewProject}
+          onStart={() => setCanvasStarted(true)}
+          onNewWorkspace={openNewWorkspace}
           nodeLibraryOpen={nodeLibraryOpen}
           onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
+          runHistoryOpen={runHistoryOpen}
+          onCloseRunHistory={() => setRunHistoryOpen(false)}
         />
       </WindowFrame>
       <Dialog
-        open={newProjectOpen}
-        title="New Project"
-        description="Choose a workspace. A project starts with a default canvas."
-        onClose={() => setNewProjectOpen(false)}
-        footer={<><Button onClick={() => setNewProjectOpen(false)}>Cancel</Button><Button variant="primary" disabled={!draftProjectName.trim() || !draftWorkspace} onClick={createProject}>Create Project</Button></>}
+        open={newWorkspaceOpen}
+        title="New Workspace"
+        description="Choose a local folder. A workspace starts with one canvas."
+        onClose={() => setNewWorkspaceOpen(false)}
+        footer={<><Button onClick={() => setNewWorkspaceOpen(false)}>Cancel</Button><Button variant="primary" disabled={!draftWorkspaceName.trim() || !draftWorkspace} onClick={createWorkspace}>Create Workspace</Button></>}
       >
-        <div className="new-project-form">
-          <TextField label="Project name" autoFocus placeholder="Untitled Project" value={draftProjectName} onChange={(event) => setDraftProjectName(event.target.value)} />
+        <div className="new-workspace-form">
+          <TextField label="Workspace name" autoFocus placeholder="Untitled Workspace" value={draftWorkspaceName} onChange={(event) => setDraftWorkspaceName(event.target.value)} />
           <SegmentedControl
-            label="Workspace"
+            label="Local folder"
             value={draftWorkspace}
             onChange={setDraftWorkspace}
             options={[
-              { value: "Thesis Workspace", label: "Thesis Workspace" },
-              { value: "Research Workspace", label: "Research Workspace" },
+              { value: "D:\\Documents\\Thesis", label: "Thesis folder" },
+              { value: "D:\\Documents\\Research", label: "Research folder" },
             ]}
           />
         </div>
@@ -177,63 +187,95 @@ function WorkbenchPreview() {
 
 interface WorkspaceNavigationProps {
   workspaceName: string;
-  projectName: string;
-  nodeLibraryOpen: boolean;
-  onNewProject: () => void;
-  onOpenRuns: () => void;
-  onToggleNodeLibrary: () => void;
+  canvasName: string;
+  onNewWorkspace: () => void;
+  onAddCanvas: () => void;
+  onSelectCanvas: (canvasName: string) => void;
 }
 
-function WorkspaceNavigation({ workspaceName, projectName, nodeLibraryOpen, onNewProject, onOpenRuns, onToggleNodeLibrary }: WorkspaceNavigationProps) {
-  const workspacePath = workspaceName === "Thesis Workspace" ? "D:\\Documents\\Thesis" : workspaceName === "Research Workspace" ? "D:\\Documents\\Research" : "D:\\bs\\seekwd\\OpenMAIC";
+function WorkspaceNavigation({ workspaceName, canvasName, onNewWorkspace, onAddCanvas, onSelectCanvas }: WorkspaceNavigationProps) {
+  const [currentWorkspaceOpen, setCurrentWorkspaceOpen] = useState(true);
+  const [otherWorkspaceOpen, setOtherWorkspaceOpen] = useState<Record<string, boolean>>({});
+  const currentCanvases = Array.from(new Set([canvasName, "Source Analysis", "Citation Review"]));
+  const otherWorkspaces = ["Thesis Workspace", "Research Workspace", "OpenMAIC"].filter((name) => name !== workspaceName);
+
   return (
     <>
-      <nav className="sidebar-global" aria-label="Global">
-        <SidebarItem icon={<SquarePen />} onClick={onNewProject}>New Project</SidebarItem>
-        <SidebarItem icon={<CirclePlay />} trailing="1" onClick={onOpenRuns}>Runs</SidebarItem>
+      <nav className="sidebar-global" aria-label="Global actions">
+        <SidebarItem icon={<FolderPlus />} onClick={onNewWorkspace}>New Workspace</SidebarItem>
         <SidebarItem icon={<CalendarClock />}>Automations</SidebarItem>
         <SidebarItem icon={<Box />}>Extensions</SidebarItem>
       </nav>
-      <div className="workspace-title">
-        <span className="workspace-title__copy">
-          <span className="workspace-title__name"><FolderOpen /><strong>{workspaceName}</strong></span>
-          <small>{workspacePath}</small>
-        </span>
-        <IconButton label="New project" size="small" onClick={onNewProject}><Plus /></IconButton>
-      </div>
-      <SidebarSection label="Workspace">
-        <SidebarGroup icon={<LibraryBig />} trailing="3" label="Canvases" defaultOpen>
-          <SidebarItem className="is-nested" icon={<PanelsTopLeft />} active>{projectName}</SidebarItem>
-          <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>Source Analysis</SidebarItem>
-          <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>Citation Review</SidebarItem>
-        </SidebarGroup>
-        <SidebarItem icon={<Blocks />} trailing="24" className={nodeLibraryOpen ? "is-context-open" : ""} onClick={onToggleNodeLibrary}>Node Library</SidebarItem>
-        <SidebarItem icon={<Folder />} trailing="12">Files</SidebarItem>
+      <SidebarSection label="Workspaces">
+        <WorkspaceRow
+          name={workspaceName}
+          open={currentWorkspaceOpen}
+          onToggle={() => setCurrentWorkspaceOpen(!currentWorkspaceOpen)}
+          onAddCanvas={onAddCanvas}
+          current
+        >
+          {currentCanvases.map((name, index) => <SidebarItem key={`${name}-${index}`} className="is-nested" icon={<PanelsTopLeft />} active={name === canvasName} onClick={() => onSelectCanvas(name)}>{name}</SidebarItem>)}
+          <button type="button" className="workspace-add-canvas" onClick={onAddCanvas}><Plus /><span>New Canvas</span></button>
+          <div className="workspace-tools" aria-label={`${workspaceName} tools`}>
+            <SidebarItem className="is-nested" icon={<Folder />}>Files</SidebarItem>
+            <SidebarItem className="is-nested" icon={<Settings />}>Environments</SidebarItem>
+            <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
+          </div>
+        </WorkspaceRow>
+        {otherWorkspaces.map((name) => <WorkspaceRow key={name} name={name} open={Boolean(otherWorkspaceOpen[name])} onToggle={() => setOtherWorkspaceOpen((open) => ({ ...open, [name]: !open[name] }))}>
+          <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>{name === "OpenMAIC" ? "Java Course" : "Literature Survey"}</SidebarItem>
+          {name === "Research Workspace" ? <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>Evaluation Plan</SidebarItem> : null}
+        </WorkspaceRow>)}
       </SidebarSection>
-      <SidebarSection label="Resources">
-        <SidebarItem icon={<Gauge />}>Environments</SidebarItem>
-        <SidebarItem icon={<Bot />}>Agents</SidebarItem>
+      <SidebarSection label="Recent">
+        <SidebarItem icon={<History />}>Evaluation Plan</SidebarItem>
+        <SidebarItem icon={<History />}>Citation Review</SidebarItem>
       </SidebarSection>
       <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
     </>
   );
 }
 
+interface WorkspaceRowProps {
+  name: string;
+  open: boolean;
+  onToggle: () => void;
+  onAddCanvas?: () => void;
+  current?: boolean;
+  children: ReactNode;
+}
+
+function WorkspaceRow({ name, open, onToggle, onAddCanvas, current = false, children }: WorkspaceRowProps) {
+  return (
+    <section className={`workspace-row ${open ? "is-open" : ""} ${current ? "is-current" : ""}`}>
+      <div className="workspace-row__header">
+        <button type="button" className="workspace-row__chevron" aria-label={`${open ? "Collapse" : "Expand"} ${name}`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button>
+        <FolderOpen className="workspace-row__icon" aria-hidden="true" />
+        <span className="workspace-row__name">{name}</span>
+        {current ? <span className="workspace-row__actions"><Tooltip content="New canvas"><IconButton label="New canvas" size="small" onClick={onAddCanvas}><Plus /></IconButton></Tooltip><Tooltip content="Workspace actions"><IconButton label="Workspace actions" size="small"><MoreHorizontal /></IconButton></Tooltip></span> : null}
+      </div>
+      {open ? <div className="workspace-row__children">{children}</div> : null}
+    </section>
+  );
+}
+
 interface CanvasPreviewProps {
   workspaceName: string;
   canvasTitle: string;
-  projectStarted: boolean;
+  canvasStarted: boolean;
   scopeEnabled: boolean;
   onWorkspaceChange: (workspaceName: string) => void;
   onScopeClear: () => void;
   onScopeEnable: () => void;
   onStart: () => void;
-  onNewProject: () => void;
+  onNewWorkspace: () => void;
   nodeLibraryOpen: boolean;
   onCloseNodeLibrary: () => void;
+  runHistoryOpen: boolean;
+  onCloseRunHistory: () => void;
 }
 
-function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewProject, nodeLibraryOpen, onCloseNodeLibrary }: CanvasPreviewProps) {
+function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewWorkspace, nodeLibraryOpen, onCloseNodeLibrary, runHistoryOpen, onCloseRunHistory }: CanvasPreviewProps) {
   const [addedNodes, setAddedNodes] = useState<string[]>([]);
   const addNode = (nodeName: string) => {
     setAddedNodes((nodes) => [...nodes, nodeName]);
@@ -253,14 +295,15 @@ function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnable
       <CanvasNode className="node-three" title="Review Report Structure" typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" />
       {addedNodes.map((nodeName, index) => <AddedCanvasNode key={`${nodeName}-${index}`} name={nodeName} index={index} />)}
       {nodeLibraryOpen ? <NodeLibrary onAdd={addNode} onClose={onCloseNodeLibrary} /> : null}
+      {runHistoryOpen ? <RunHistoryPanel onClose={onCloseRunHistory} /> : null}
       <AgentComposer
         workspaceName={workspaceName}
-        draftMode={!projectStarted}
+        draftMode={!canvasStarted}
         scopeEnabled={scopeEnabled}
         onWorkspaceChange={onWorkspaceChange}
         onScopeClear={onScopeClear}
         onScopeEnable={onScopeEnable}
-        onNewProject={onNewProject}
+        onNewWorkspace={onNewWorkspace}
         onSubmit={onStart}
       />
       <div className="canvas-zoom"><button aria-label="Zoom out" title="Zoom out"><Minus /></button><span>100%</span><button aria-label="Zoom in" title="Zoom in"><Plus /></button></div>
@@ -311,11 +354,11 @@ interface AgentComposerProps {
   onWorkspaceChange: (workspaceName: string) => void;
   onScopeClear: () => void;
   onScopeEnable: () => void;
-  onNewProject: () => void;
+  onNewWorkspace: () => void;
   onSubmit: () => void;
 }
 
-function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onNewProject, onSubmit }: AgentComposerProps) {
+function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onNewWorkspace, onSubmit }: AgentComposerProps) {
   const [value, setValue] = useState("");
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -354,7 +397,7 @@ function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChan
               <div className="agent-composer__scope-list">
                 {visibleWorkspaces.map((workspace) => <button type="button" key={workspace} className={workspace === workspaceName ? "is-selected" : ""} onClick={() => selectWorkspace(workspace)}><Folder /><span>{workspace}</span></button>)}
               </div>
-              <button type="button" className="agent-composer__new-project" onClick={() => { setScopePickerOpen(false); onNewProject(); }}><FolderPlus /><span>New Project</span></button>
+              <button type="button" className="agent-composer__new-workspace" onClick={() => { setScopePickerOpen(false); onNewWorkspace(); }}><FolderPlus /><span>New Workspace</span></button>
             </div>
           ) : null}
         </div>
@@ -380,6 +423,28 @@ function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChan
       </div>
     </section>
   );
+}
+
+function RunHistoryPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <aside className="run-history" aria-label="Run history">
+      <header className="run-history__header">
+        <div><History /><span><strong>Run History</strong><small>Experiment Report</small></span></div>
+        <IconButton label="Close run history" size="small" onClick={onClose}><X /></IconButton>
+      </header>
+      <div className="run-history__session"><GitFork /><span><strong>Workspace session</strong><small>Cross-canvas execution</small></span><StatusBadge tone="info">Active</StatusBadge></div>
+      <div className="run-history__list">
+        <RunHistoryItem icon={<Clock3 />} title="Run 003" detail="Draft Experiment Report" status="Running" tone="info" />
+        <RunHistoryItem icon={<CheckCircle2 />} title="Run 002" detail="Research Topic → Draft" status="Completed" tone="success" />
+        <RunHistoryItem icon={<TriangleAlert />} title="Run 001" detail="Waiting for source input" status="Failed" tone="danger" />
+      </div>
+      <footer className="run-history__footer"><span>Runs are scoped to this canvas.</span><button type="button">Open workspace session</button></footer>
+    </aside>
+  );
+}
+
+function RunHistoryItem({ icon, title, detail, status, tone }: { icon: ReactNode; title: string; detail: string; status: string; tone: "info" | "success" | "danger" }) {
+  return <button type="button" className="run-history__item"><span className={`run-history__item-icon is-${tone}`}>{icon}</span><span className="run-history__item-copy"><strong>{title}</strong><small>{detail}</small></span><StatusBadge tone={tone}>{status}</StatusBadge></button>;
 }
 
 function NodeInspector() {

@@ -77,28 +77,29 @@ Canvas node 220px 默认宽度
 
 ```text
 Workspace（本地目录与权限边界）
-  -> Project（某项长期工作与上下文边界）
-    -> Canvas（可独立打开、编辑和运行的图）
+  -> Canvas（可独立打开、编辑和运行的图）
+    -> Node（图中的可配置执行单元）
 ```
 
-- 新建 Project 必须显式选择 Workspace；创建完成时自动建立并打开默认 Canvas。
-- 用户开始另一项工作时使用 Workspace 标题旁的 `New Project`，不需要清空或复用当前 Canvas。
-- Workspace 标题本身是切换器；切换后恢复该 Workspace 最近打开的 Project 和 Canvas。
-- Canvas 标签栏只管理当前 Project 内已打开的 Canvas，不能承担 Project 切换职责。
+- 新建 Workspace 必须显式选择本地目录；创建完成时自动建立并打开默认 Canvas。
+- 用户开始另一项工作时新建或展开另一个 Workspace，或者在当前 Workspace 下新建 Canvas；不需要清空或复用当前 Canvas。
+- Workspace 是项目式的上下文、文件和权限边界。Canvas 是同一 Workspace 内可单独编辑、调试和运行的工作图。
+- 节点只属于一个 Canvas。节点可通过显式跨画布引用调用同一 Workspace 的其他 Canvas；跨 Workspace 调用需要单独的权限策略与审批。
+- Canvas 标签栏只管理当前 Workspace 内已经打开的 Canvas，不能承担 Workspace 切换职责。
 
 ## 画布 Agent Composer
 
-Canvas 底部上方保留一个居中的 Agent Composer，用于提出初始目标、补充要求和请求变更。它属于当前 Project/Canvas 的协作入口，不是另一个全局导航栏。
+Canvas 底部上方保留一个居中的 Agent Composer，用于提出初始目标、补充要求和请求变更。它属于当前 Workspace/Canvas 的协作入口，不是另一个全局导航栏。
 
 Composer 分为两个阶段：
 
-1. `draft`：Project 已创建但尚未提交第一个有效目标。显示 Workspace 范围栏；用户可以切换已有 Workspace、移除范围或转入新建 Project。
-2. `active`：首次有效提交后，Project 的工作上下文已建立。Workspace 范围栏消失，Composer 只接受当前 Project 内的补充、询问和变更请求。
+1. `draft`：Canvas 已创建但尚未提交第一个有效目标。显示 Workspace 范围栏；用户可以切换已有 Workspace、移除范围或转入新建 Workspace。
+2. `active`：首次有效提交后，Canvas 的工作上下文已建立。Workspace 范围栏消失，Composer 只接受当前 Canvas 内的补充、询问和变更请求。
 
 约束：
 
 - 移除 Workspace 范围后保留 `Choose workspace` 入口，不能让用户陷入无法恢复选择的状态。
-- `active` 阶段不能在 Composer 内临时切换 Workspace；需要不同上下文时新建或打开另一个 Project。
+- `active` 阶段不能在 Composer 内临时切换 Workspace；需要不同上下文时新建或打开另一个 Workspace 或 Canvas。
 - Composer 距 Canvas 底边保留 18px，并与缩放、运行面板和选中节点错开。
 - 使用单层半透明材质、细边界和克制阴影；不使用渐变、装饰光斑或巨型圆角。
 - 发送、附件、关闭和范围等操作使用语义 SVG 图标；图标按钮必须提供可访问名称和 Tooltip。
@@ -120,21 +121,44 @@ Composer 分为两个阶段：
 
 ```text
 Global actions
-  New Project, Runs, Automations, Extensions
+  New Workspace, Automations, Extensions
 
-Current Workspace
-  Canvases, Node Library, Files
+Workspaces
+  Workspace
+    Canvases
+    Files, Environments, Agents
+  Other workspaces
 
-Workspace resources
-  Environments, Agents, Settings
+Recent
+  Recently opened canvases
+
+Settings
 ```
 
-- Global actions 跨项目有效，放在侧边栏顶部并与当前 Workspace 内容隔开。
-- `Runs` 是跨当前项目的运行历史入口；`Automations` 管理计划、触发与后台任务。只在接入仓库提供方后才显示 Pull Requests，不能把它当成所有 Workspace 的固定入口。
-- Canvas 集合使用 `LibraryBig`，单个 Canvas 使用 `PanelsTopLeft`，Node Library 使用 `Blocks`。三者必须视觉可区分，不能复用泛化的 workflow 图标。
-- Node Library 是当前 Canvas 的补充工具而非新的永久分栏。它通过侧栏入口或顶部 `Add node` 打开同一个可搜索面板。
+- Global actions 跨 Workspace 有效，放在侧边栏顶部并与 Workspace 内容隔开。
+- Workspace 行本身不使用选中底色，展开与收起只由独立 chevron 控制；当前 Canvas 是唯一使用选中底色的行。当前 Workspace 的 `New Canvas` 和菜单操作在悬停或键盘聚焦时出现。
+- Workspace 使用 `FolderOpen`，单个 Canvas 使用 `PanelsTopLeft`；二者必须视觉可区分，不能复用泛化的 workflow 图标。
+- Node Library 是当前 Canvas 的补充工具而非新的永久分栏。它通过顶部 `Add node` 打开同一个可搜索面板。
 - 点击节点库条目会创建一个未配置节点并放入当前 Canvas；随后由 Inspector 或 Agent Composer 完成配置。真实运行时应将这个动作映射为 Graph Patch，而非仅改 UI 状态。
-- Node Library 打开时，当前 Canvas 仍是唯一带选中底色的导航项；节点库仅用图标颜色表示其上下文面板已打开。
+- Node Library 打开时，当前 Canvas 仍是唯一带选中底色的导航项。
+- Run History 不占用全局导航。它是当前 Canvas 工具栏中与 `Run` 相邻的上下文面板；底部 Run Output 仅在运行或手动打开时显示。
+
+### 运行记录归属
+
+```text
+Canvas B
+  Run 003
+    node progress, input/output, logs, artifacts, approvals, interventions
+  Run 002
+  Run 001
+
+Workspace execution session
+  Canvas A / Node 3 -> Canvas B / Node 2
+```
+
+- 单画布运行记录属于该 Canvas，展示状态、节点级进度、输入输出、日志和错误、暂停/恢复/取消/重试、产物、审批等待和 AI 介入。
+- 涉及多个画布的运行属于 Workspace execution session，但从当前 Canvas 的 Run History 可追溯，不作为侧边栏常驻入口。
+- 跨 Workspace 执行必须显式标记其调用关系，经过目标 Workspace 权限策略和需要时的人类审批。
 
 ## 运行状态表达
 
