@@ -88,7 +88,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
             valueSetter?.call(input, "");
             input.dispatchEvent(new Event("input", { bubbles: true }));
             input.focus();
-          }}><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /><path d="m5.8 5.8 4.4 4.4m0-4.4-4.4 4.4" /></svg></button> : null}
+          }}><svg viewBox="0 0 25.8008 25.459" aria-hidden="true"><path d="M25.44 12.725c0 7.002-5.713 12.714-12.725 12.714C5.713 25.44 0 19.727 0 12.725 0 5.713 5.713 0 12.715 0 19.727 0 25.44 5.713 25.44 12.725ZM16.348 7.87l-3.633 3.614L9.102 7.881a.854.854 0 0 0-.625-.264.884.884 0 0 0-.899.879c0 .244.098.459.274.635l3.603 3.603-3.603 3.604a.884.884 0 0 0-.274.635c0 .508.4.908.899.908.253 0 .478-.098.654-.274l3.584-3.603 3.594 3.603c.175.176.4.274.654.274.498 0 .898-.4.898-.908 0-.244-.078-.469-.263-.645l-3.604-3.594 3.613-3.613c.196-.195.264-.39.264-.644a.884.884 0 0 0-.889-.88c-.244 0-.439.079-.634.274Z" /></svg></button> : null}
           {trailingAction ? <span className="sk-field__trailing">{trailingAction}</span> : null}
         </span>
         {error ? (
@@ -114,7 +114,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(({ label, cl
   <label className={`sk-checkbox ${className}`}>
     <input ref={ref} type="checkbox" {...props} />
     <span className="sk-checkbox__box" aria-hidden="true">
-      <svg viewBox="0 0 12 10"><path d="m1.5 5 3 3 6-6" /></svg>
+      <svg viewBox="0 0 8.97949 8.61816"><path d="M3.184 8.618c.21 0 .376-.093.493-.273L8.29 1.079c.088-.142.122-.249.122-.361 0-.269-.176-.445-.444-.445-.196 0-.303.064-.42.25L3.164 7.51.89 4.53C.767 4.36.645 4.292.47 4.292.19 4.292 0 4.482 0 4.751c0 .112.049.239.142.356l2.534 3.228c.146.19.298.283.508.283Z" /></svg>
     </span>
     <span>{label}</span>
   </label>

@@ -2,10 +2,8 @@ import { useState } from "react";
 import {
   Bot,
   Box,
-  Braces,
   ChevronRight,
   CirclePlay,
-  FileOutput,
   Folder,
   FolderOpen,
   Gauge,
@@ -187,7 +185,6 @@ function RunPanel() {
 function ComponentGallery() {
   const [checked, setChecked] = useState(true);
   const [enabled, setEnabled] = useState(true);
-  const [mode, setMode] = useState("edit");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [noticeVisible, setNoticeVisible] = useState(false);
   const appIcon = <span className="swift-app-mark">Seek<br />wd</span>;
@@ -201,11 +198,7 @@ function ComponentGallery() {
         <div className="gallery-row"><span>Checkbox</span><Checkbox label="Checkbox" checked={checked} onChange={(event) => setChecked(event.target.checked)} /></div>
         <div className="gallery-row"><span>Messagebox</span><Button variant="primary" onClick={() => setDialogOpen(true)}>Show</Button></div>
         <div className="gallery-row"><span>Notification</span><Button variant="primary" onClick={() => setNoticeVisible(!noticeVisible)}>Show</Button></div>
-        <div className="gallery-row"><span>Progress</span><div className="gallery-row__controls is-stacked"><Progress value={25} /><Progress value={75} compact /></div></div>
-        <div className="gallery-subheading">Seekwd extensions</div>
-        <div className="gallery-row"><span>Toolbar</span><div className="gallery-row__controls"><IconButton label="Add node"><Plus /></IconButton><SegmentedControl label="Canvas mode" value={mode} onChange={setMode} options={[{ value: "edit", label: "Edit" }, { value: "run", label: "Run" }, { value: "debug", label: "Debug" }]} /><Button variant="primary" leadingIcon={<Play />}>Run</Button></div></div>
-        <div className="gallery-row"><span>Run status</span><div className="gallery-row__controls"><StatusBadge tone="info" dot>Running</StatusBadge><StatusBadge tone="success" dot>Complete</StatusBadge><StatusBadge tone="warning" dot>Waiting</StatusBadge><StatusBadge tone="danger" dot>Failed</StatusBadge></div></div>
-        <div className="gallery-node-row"><CanvasNode title="Read sources" typeLabel="File input" icon={<FolderOpen />} state="success" outputs={[{ id: "file", label: "File", kind: "data" }]} /><CanvasNode title="Extract structure" typeLabel="Code task" icon={<Braces />} state="running" selected inputs={[{ id: "file", label: "File", kind: "data" }]} outputs={[{ id: "data", label: "Structure", kind: "data" }]} /><CanvasNode title="Review content" typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "next", label: "Continue", kind: "event" }]} /><CanvasNode title="Export document" typeLabel="File output" icon={<FileOutput />} state="error" inputs={[{ id: "content", label: "Content", kind: "data" }]} /></div>
+        <div className="gallery-row"><span>Progress</span><div className="gallery-row__controls is-stacked is-progress"><Progress value={25} /><Progress value={75} compact /></div></div>
         {noticeVisible ? <Notification title="Seekwd" icon={appIcon} time="now" onDismiss={() => setNoticeVisible(false)}>Canvas saved to the current workspace.</Notification> : null}
         <MessageBox open={dialogOpen} title="Messagebox" icon={appIcon} actionLabel="OK" onClose={() => setDialogOpen(false)}>This message box is part of the Seekwd UI foundation.</MessageBox>
       </main>
