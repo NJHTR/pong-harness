@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ArrowUp,
   Bot,
   Box,
   ChevronRight,
@@ -8,12 +9,14 @@ import {
   ArrowUpFromLine,
   Folder,
   FolderOpen,
+  FolderPlus,
   Gauge,
   Minus,
   Moon,
   MoreHorizontal,
   PanelBottom,
   PanelRight,
+  Paperclip,
   Pause,
   Play,
   Plus,
@@ -22,6 +25,7 @@ import {
   Sun,
   Type,
   Workflow,
+  X,
   Zap,
 } from "lucide-react";
 import {
@@ -89,6 +93,8 @@ function WorkbenchPreview() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [draftProjectName, setDraftProjectName] = useState("");
   const [draftWorkspace, setDraftWorkspace] = useState("");
+  const [projectStarted, setProjectStarted] = useState(false);
+  const [composerScopeEnabled, setComposerScopeEnabled] = useState(true);
 
   const createProject = () => {
     const nextName = draftProjectName.trim();
@@ -96,7 +102,15 @@ function WorkbenchPreview() {
     setWorkspaceName(draftWorkspace);
     setProjectName(nextName);
     setDraftProjectName("");
+    setProjectStarted(false);
+    setComposerScopeEnabled(true);
     setNewProjectOpen(false);
+  };
+
+  const openNewProject = () => {
+    setDraftProjectName("");
+    setDraftWorkspace("");
+    setNewProjectOpen(true);
   };
 
   return (
@@ -114,11 +128,21 @@ function WorkbenchPreview() {
             <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
           </Toolbar>
         }
-        sidebar={<WorkspaceNavigation workspaceName={workspaceName} projectName={projectName} onWorkspaceChange={setWorkspaceName} onNewProject={() => { setDraftWorkspace(""); setNewProjectOpen(true); }} />}
+        sidebar={<WorkspaceNavigation workspaceName={workspaceName} projectName={projectName} onNewProject={openNewProject} />}
         inspector={inspectorOpen ? <NodeInspector /> : undefined}
         bottomPanel={bottomOpen ? <RunPanel /> : undefined}
       >
-        <CanvasPreview workspaceName={workspaceName} canvasTitle={projectName} />
+        <CanvasPreview
+          workspaceName={workspaceName}
+          canvasTitle={projectName}
+          projectStarted={projectStarted}
+          scopeEnabled={composerScopeEnabled}
+          onWorkspaceChange={setWorkspaceName}
+          onScopeClear={() => setComposerScopeEnabled(false)}
+          onScopeEnable={() => setComposerScopeEnabled(true)}
+          onStart={() => setProjectStarted(true)}
+          onNewProject={openNewProject}
+        />
       </WindowFrame>
       <Dialog
         open={newProjectOpen}
@@ -144,20 +168,14 @@ function WorkbenchPreview() {
   );
 }
 
-function WorkspaceNavigation({ workspaceName, projectName, onWorkspaceChange, onNewProject }: { workspaceName: string; projectName: string; onWorkspaceChange: (name: string) => void; onNewProject: () => void }) {
+function WorkspaceNavigation({ workspaceName, projectName, onNewProject }: { workspaceName: string; projectName: string; onNewProject: () => void }) {
+  const workspacePath = workspaceName === "Thesis Workspace" ? "D:\\Documents\\Thesis" : workspaceName === "Research Workspace" ? "D:\\Documents\\Research" : "D:\\bs\\seekwd\\OpenMAIC";
   return (
     <>
       <div className="workspace-title">
         <span className="workspace-title__copy">
-          <Menu
-            label={workspaceName}
-            icon={<FolderOpen />}
-            items={[
-              { label: "Thesis Workspace", icon: <FolderOpen />, checked: workspaceName === "Thesis Workspace", onSelect: () => onWorkspaceChange("Thesis Workspace") },
-              { label: "Research Workspace", icon: <FolderOpen />, checked: workspaceName === "Research Workspace", onSelect: () => onWorkspaceChange("Research Workspace") },
-            ]}
-          />
-          <small>{workspaceName === "Thesis Workspace" ? "D:\\Documents\\Thesis" : "D:\\Documents\\Research"}</small>
+          <span className="workspace-title__name"><FolderOpen /><strong>{workspaceName}</strong></span>
+          <small>{workspacePath}</small>
         </span>
         <IconButton label="New project" size="small" onClick={onNewProject}><Plus /></IconButton>
       </div>
@@ -180,7 +198,19 @@ function WorkspaceNavigation({ workspaceName, projectName, onWorkspaceChange, on
   );
 }
 
-function CanvasPreview({ workspaceName, canvasTitle }: { workspaceName: string; canvasTitle: string }) {
+interface CanvasPreviewProps {
+  workspaceName: string;
+  canvasTitle: string;
+  projectStarted: boolean;
+  scopeEnabled: boolean;
+  onWorkspaceChange: (workspaceName: string) => void;
+  onScopeClear: () => void;
+  onScopeEnable: () => void;
+  onStart: () => void;
+  onNewProject: () => void;
+}
+
+function CanvasPreview({ workspaceName, canvasTitle, projectStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewProject }: CanvasPreviewProps) {
   return (
     <div className="canvas-preview">
       <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
@@ -192,8 +222,96 @@ function CanvasPreview({ workspaceName, canvasTitle }: { workspaceName: string; 
       <CanvasNode className="node-one" title="Research Topic" typeLabel="Text input" icon={<Type />} state="success" outputs={[{ id: "text", label: "Topic", kind: "data" }]} footer="128 chars" />
       <CanvasNode className="node-two" title="Draft Experiment Report" typeLabel="Agent task" icon={<Bot />} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data" }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data" }]} footer="Step 3 of 5" />
       <CanvasNode className="node-three" title="Review Report Structure" typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" />
+      <AgentComposer
+        workspaceName={workspaceName}
+        draftMode={!projectStarted}
+        scopeEnabled={scopeEnabled}
+        onWorkspaceChange={onWorkspaceChange}
+        onScopeClear={onScopeClear}
+        onScopeEnable={onScopeEnable}
+        onNewProject={onNewProject}
+        onSubmit={onStart}
+      />
       <div className="canvas-zoom"><button aria-label="Zoom out" title="Zoom out"><Minus /></button><span>100%</span><button aria-label="Zoom in" title="Zoom in"><Plus /></button></div>
     </div>
+  );
+}
+
+interface AgentComposerProps {
+  workspaceName: string;
+  draftMode: boolean;
+  scopeEnabled: boolean;
+  onWorkspaceChange: (workspaceName: string) => void;
+  onScopeClear: () => void;
+  onScopeEnable: () => void;
+  onNewProject: () => void;
+  onSubmit: () => void;
+}
+
+function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onNewProject, onSubmit }: AgentComposerProps) {
+  const [value, setValue] = useState("");
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const workspaces = ["Thesis Workspace", "Research Workspace", "OpenMAIC"];
+  const visibleWorkspaces = workspaces.filter((workspace) => workspace.toLowerCase().includes(query.toLowerCase()));
+
+  const submit = () => {
+    if (!value.trim()) return;
+    setValue("");
+    setScopePickerOpen(false);
+    onSubmit();
+  };
+
+  const selectWorkspace = (workspace: string) => {
+    onWorkspaceChange(workspace);
+    onScopeEnable();
+    setScopePickerOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <section className="agent-composer" aria-label="Agent conversation">
+      {draftMode ? (
+        <div className="agent-composer__scope-row">
+          {scopeEnabled ? (
+            <div className="agent-composer__scope">
+              <button type="button" className="agent-composer__scope-trigger" onClick={() => setScopePickerOpen(!scopePickerOpen)} aria-expanded={scopePickerOpen}>
+                <FolderOpen /><span>{workspaceName}</span>
+              </button>
+              <IconButton label="Remove workspace scope" size="small" className="agent-composer__scope-remove" onClick={() => { onScopeClear(); setScopePickerOpen(false); }}><X /></IconButton>
+            </div>
+          ) : <button type="button" className="agent-composer__scope-empty" onClick={() => setScopePickerOpen(!scopePickerOpen)} aria-expanded={scopePickerOpen}><FolderPlus /><span>Choose workspace</span></button>}
+          {scopePickerOpen ? (
+            <div className="agent-composer__scope-picker" role="dialog" aria-label="Choose workspace">
+              <TextField aria-label="Search workspaces" leadingIcon={<Search />} placeholder="Search workspaces" value={query} onChange={(event) => setQuery(event.target.value)} />
+              <div className="agent-composer__scope-list">
+                {visibleWorkspaces.map((workspace) => <button type="button" key={workspace} className={workspace === workspaceName ? "is-selected" : ""} onClick={() => selectWorkspace(workspace)}><Folder /><span>{workspace}</span></button>)}
+              </div>
+              <button type="button" className="agent-composer__new-project" onClick={() => { setScopePickerOpen(false); onNewProject(); }}><FolderPlus /><span>New Project</span></button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="agent-composer__surface">
+        <textarea
+          aria-label="Message the agent"
+          placeholder={draftMode ? "Describe what to build" : "Request a change or ask about this canvas"}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <footer>
+          <Tooltip content="Attach context"><IconButton label="Attach context" size="small"><Paperclip /></IconButton></Tooltip>
+          <span className="agent-composer__spacer" />
+          <Tooltip content="Send request"><IconButton label="Send request" active={Boolean(value.trim())} onClick={submit}><ArrowUp /></IconButton></Tooltip>
+        </footer>
+      </div>
+    </section>
   );
 }
 

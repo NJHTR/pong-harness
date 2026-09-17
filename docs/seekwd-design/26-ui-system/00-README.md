@@ -86,6 +86,23 @@ Workspace（本地目录与权限边界）
 - Workspace 标题本身是切换器；切换后恢复该 Workspace 最近打开的 Project 和 Canvas。
 - Canvas 标签栏只管理当前 Project 内已打开的 Canvas，不能承担 Project 切换职责。
 
+## 画布 Agent Composer
+
+Canvas 底部上方保留一个居中的 Agent Composer，用于提出初始目标、补充要求和请求变更。它属于当前 Project/Canvas 的协作入口，不是另一个全局导航栏。
+
+Composer 分为两个阶段：
+
+1. `draft`：Project 已创建但尚未提交第一个有效目标。显示 Workspace 范围栏；用户可以切换已有 Workspace、移除范围或转入新建 Project。
+2. `active`：首次有效提交后，Project 的工作上下文已建立。Workspace 范围栏消失，Composer 只接受当前 Project 内的补充、询问和变更请求。
+
+约束：
+
+- 移除 Workspace 范围后保留 `Choose workspace` 入口，不能让用户陷入无法恢复选择的状态。
+- `active` 阶段不能在 Composer 内临时切换 Workspace；需要不同上下文时新建或打开另一个 Project。
+- Composer 距 Canvas 底边保留 18px，并与缩放、运行面板和选中节点错开。
+- 使用单层半透明材质、细边界和克制阴影；不使用渐变、装饰光斑或巨型圆角。
+- 发送、附件、关闭和范围等操作使用语义 SVG 图标；图标按钮必须提供可访问名称和 Tooltip。
+
 ## 工作台排版和导航标准
 
 - 默认工作台正文采用 11px，重要对象名称采用 12px，辅助信息采用 9–10px；同一导航层级不得临时放大字号。
