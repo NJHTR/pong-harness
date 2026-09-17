@@ -259,9 +259,10 @@ export interface MenuProps {
   icon?: ReactNode;
   defaultOpen?: boolean;
   inline?: boolean;
+  iconOnly?: boolean;
 }
 
-export function Menu({ label, items, icon, defaultOpen = false, inline = false }: MenuProps) {
+export function Menu({ label, items, icon, defaultOpen = false, inline = false, iconOnly = false }: MenuProps) {
   const [open, setOpen] = useState(defaultOpen);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -288,9 +289,9 @@ export function Menu({ label, items, icon, defaultOpen = false, inline = false }
   if (inline) return <div className="sk-menu-root is-inline" ref={rootRef}>{menu}</div>;
   return (
     <div className="sk-menu-root" ref={rootRef}>
-      <button type="button" className="sk-menu-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} onKeyDown={(event) => {
+      <button type="button" className={`sk-menu-trigger ${iconOnly ? "is-icon-only" : ""}`} aria-label={iconOnly ? label : undefined} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} onKeyDown={(event) => {
         if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); requestAnimationFrame(() => focusItem(0)); }
-      }}>{icon}<span>{label}</span><ChevronDown /></button>
+      }}>{icon}{iconOnly ? null : <><span>{label}</span><ChevronDown /></>}</button>
       {open ? menu : null}
     </div>
   );

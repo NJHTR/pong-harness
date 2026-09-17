@@ -137,6 +137,8 @@ Settings
 
 - Global actions 跨 Workspace 有效，放在侧边栏顶部并与 Workspace 内容隔开。
 - Workspace 行本身不使用选中底色，展开与收起只由独立 chevron 控制；当前 Canvas 是唯一使用选中底色的行。当前 Workspace 的 `New Canvas` 和菜单操作在悬停或键盘聚焦时出现。
+- `Workspaces` 与 `Recent` 都是一级可折叠分组；折叠仅隐藏内容，必须保留清晰的展开状态和键盘可达的 chevron。这样长 Workspace 列表不会把 Recent 或 Settings 推出可视范围。
+- 当前 Canvas 可在 Workspace 内展开，展示紧凑的节点预览列表。它用于识别画布结构，不替代画布本身的编辑、运行或检查器。
 - Workspace 使用 `FolderOpen`，单个 Canvas 使用 `PanelsTopLeft`；二者必须视觉可区分，不能复用泛化的 workflow 图标。
 - Node Library 是当前 Canvas 的补充工具而非新的永久分栏。它通过顶部 `Add node` 打开同一个可搜索面板。
 - 点击节点库条目会创建一个未配置节点并放入当前 Canvas；随后由 Inspector 或 Agent Composer 完成配置。真实运行时应将这个动作映射为 Graph Patch，而非仅改 UI 状态。
@@ -159,6 +161,15 @@ Workspace execution session
 - 单画布运行记录属于该 Canvas，展示状态、节点级进度、输入输出、日志和错误、暂停/恢复/取消/重试、产物、审批等待和 AI 介入。
 - 涉及多个画布的运行属于 Workspace execution session，但从当前 Canvas 的 Run History 可追溯，不作为侧边栏常驻入口。
 - 跨 Workspace 执行必须显式标记其调用关系，经过目标 Workspace 权限策略和需要时的人类审批。
+
+### 对象管理与删除影响
+
+- Workspace、Canvas 和 Node 的重命名与删除入口必须紧邻对象，使用统一的三点菜单，至少提供 `Rename` 和 `Delete`。创建入口不能成为唯一的生命周期管理入口。
+- Rename 保持对象身份不变，只更新显示名称及所有可见引用；不应通过“删除后新建”实现重命名。
+- 删除 Node 前必须计算并展示其入边、出边、数据依赖、触发关系、等待中的执行和下游节点。确认后移除关联边，并把无法继续的执行标为需要处理。
+- 删除 Canvas 前必须展示内部节点、运行记录、被其他 Canvas 调用或触发的引用。删除后调用方不得静默继续，需进入等待修复或替换目标状态。
+- 删除 Workspace 前必须展示 Canvas、文件、环境配置、自动化和跨 Workspace 授权的影响；任何跨 Workspace 调用必须失效并经过人工确认后重新配置。
+- 真实实现使用 `GraphCommand` / `WorkspaceCommand` 在事务中执行这些变更，并生成可撤销审计记录；UI Lab 仅演示其确认和可见状态。
 
 ## 运行状态表达
 
