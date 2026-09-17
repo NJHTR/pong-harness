@@ -324,8 +324,9 @@
   .sk-node__heading { display: grid; gap: 2px; min-width: 0; }
   .sk-node__heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .sk-node__heading small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sk-text-tertiary); font-size: 10px; }
-  .sk-node__ports { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0; min-height: 45px; }
-  .sk-node__ports > div { display: grid; align-content: start; gap: 6px; }
+  .sk-node__ports { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 8px 0; min-height: 45px; }
+  .sk-node__ports > div { min-width: 0; display: grid; align-content: start; gap: 6px; }
+  .sk-port-group { min-width: 0; display: grid; align-content: start; gap: 6px; }
   .sk-port { position: relative; min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--sk-text-secondary); font-size: 10px; }
   .sk-port__icon { width: 12px; height: 12px; flex: 0 0 12px; color: var(--sk-accent); stroke-width: 1.7; }
   .sk-port--input { left: -5px; }
@@ -333,6 +334,13 @@
   .sk-port--flow .sk-port__icon { color: var(--sk-success); }
   .sk-port--event .sk-port__icon { color: var(--sk-warning); }
   .sk-port--resource .sk-port__icon { color: #b184e8; }
+  .sk-port > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sk-port > small { flex: 0 0 auto; color: var(--sk-text-tertiary); font: 9px var(--sk-font-mono); }
+  .sk-port-group__more { min-height: 19px; padding: 2px 5px; display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 4px; color: var(--sk-text-tertiary); background: color-mix(in srgb, var(--sk-text-primary) 5%, transparent); font-size: 9px; text-align: left; }
+  .sk-port-group__more:hover { color: var(--sk-text-secondary); background: color-mix(in srgb, var(--sk-text-primary) 9%, transparent); }
+  .sk-port-group__more svg { width: 10px; height: 10px; }
+  .sk-port-group__more svg.is-expanded { transform: rotate(180deg); }
+  .sk-port-group__summary { padding: 2px 5px; color: var(--sk-text-tertiary); font-size: 9px; }
   .sk-node__footer { min-height: 27px; padding: 5px 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--sk-border-subtle); color: var(--sk-text-tertiary); font-size: 10px; }
 
   @media (max-width: 820px) {

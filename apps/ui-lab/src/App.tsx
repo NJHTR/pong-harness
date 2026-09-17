@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowUp,
   Bot,
@@ -9,12 +9,15 @@ import {
   Blocks,
   CalendarClock,
   CheckCircle2,
+  CircleAlert,
+  CirclePlay,
   Clock3,
   Folder,
   FolderOpen,
   FolderPlus,
   GitFork,
   History,
+  LoaderCircle,
   Minus,
   Moon,
   MoreHorizontal,
@@ -64,7 +67,12 @@ type Theme = "dark" | "light";
 type LabView = "workbench" | "components";
 type ManagedKind = "workspace" | "canvas" | "node";
 interface ManagedTarget { kind: ManagedKind; id?: string; name: string }
-interface NodeSummary { id: string; name: string }
+interface NodeSummary { id: string; name: string; primary?: boolean }
+type CanvasRuntimeState = "idle" | "running" | "waiting" | "success" | "error";
+
+function aggregateCanvasState(states: CanvasRuntimeState[]): CanvasRuntimeState {
+  return (["error", "waiting", "running", "success", "idle"] as const).find((state) => states.includes(state)) ?? "idle";
+}
 
 export function App() {
   const [theme, setTheme] = useState<Theme>("light");
@@ -102,7 +110,7 @@ function WorkbenchPreview() {
   const [canvasName, setCanvasName] = useState("Experiment Report");
   const [canvasNames, setCanvasNames] = useState(["Experiment Report", "Source Analysis", "Citation Review"]);
   const [nodes, setNodes] = useState<NodeSummary[]>([
-    { id: "research-topic", name: "Research Topic" },
+    { id: "research-topic", name: "Research Topic", primary: true },
     { id: "draft-report", name: "Draft Experiment Report" },
     { id: "review-structure", name: "Review Report Structure" },
   ]);
@@ -118,6 +126,26 @@ function WorkbenchPreview() {
   const [renameTarget, setRenameTarget] = useState<ManagedTarget | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ManagedTarget | null>(null);
+  const [canvasStates, setCanvasStates] = useState<Record<string, CanvasRuntimeState>>({
+    "Experiment Report": "idle",
+    "Source Analysis": "error",
+    "Citation Review": "running",
+    "Literature Survey": "success",
+    "Evaluation Plan": "idle",
+    "Java Course": "waiting",
+  });
+  const [activeRunCanvas, setActiveRunCanvas] = useState<string | null>(null);
+  const [completedCanvas, setCompletedCanvas] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!activeRunCanvas) return;
+    const timer = window.setTimeout(() => {
+      setCanvasStates((states) => ({ ...states, [activeRunCanvas]: "success" }));
+      setCompletedCanvas(activeRunCanvas);
+      setActiveRunCanvas(null);
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [activeRunCanvas]);
 
   const createWorkspace = () => {
     const nextName = draftWorkspaceName.trim();
@@ -127,6 +155,7 @@ function WorkbenchPreview() {
     setCanvasName("Untitled Canvas");
     setCanvasNames(["Untitled Canvas"]);
     setNodes([]);
+    setCanvasStates((states) => ({ ...states, "Untitled Canvas": "idle" }));
     setDraftWorkspaceName("");
     setCanvasStarted(false);
     setComposerScopeEnabled(true);
@@ -143,6 +172,7 @@ function WorkbenchPreview() {
     const nextName = `Untitled Canvas ${canvasNames.length + 1}`;
     setCanvasNames((names) => [...names, nextName]);
     setCanvasName(nextName);
+    setCanvasStates((states) => ({ ...states, [nextName]: "idle" }));
     setCanvasStarted(false);
     setComposerScopeEnabled(true);
   };
@@ -161,6 +191,10 @@ function WorkbenchPreview() {
     }
     if (renameTarget.kind === "canvas") {
       setCanvasNames((names) => names.map((name) => name === renameTarget.name ? nextName : name));
+      setCanvasStates((states) => {
+        const { [renameTarget.name]: state = "idle", ...rest } = states;
+        return { ...rest, [nextName]: state };
+      });
       if (canvasName === renameTarget.name) setCanvasName(nextName);
     }
     if (renameTarget.kind === "node") setNodes((items) => items.map((node) => node.id === renameTarget.id ? { ...node, name: nextName } : node));
@@ -184,6 +218,10 @@ function WorkbenchPreview() {
     if (deleteTarget.kind === "canvas") {
       const remaining = canvasNames.filter((name) => name !== deleteTarget.name);
       setCanvasNames(remaining);
+      setCanvasStates((states) => {
+        const { [deleteTarget.name]: _deleted, ...rest } = states;
+        return rest;
+      });
       if (canvasName === deleteTarget.name) {
         const next = remaining[0] ?? "No Canvas";
         setCanvasName(next);
@@ -195,6 +233,14 @@ function WorkbenchPreview() {
   };
 
   const addNode = (name: string) => setNodes((items) => [...items, { id: `${name.toLowerCase().replace(/\s+/g, "-")}-${Date.now()}`, name }]);
+  const setPrimaryNode = (nodeId: string) => setNodes((items) => items.map((node) => ({ ...node, primary: node.id === nodeId })));
+  const runCanvas = () => {
+    if (!nodes.some((node) => node.primary)) return;
+    setCanvasStates((states) => ({ ...states, [canvasName]: "running" }));
+    setActiveRunCanvas(canvasName);
+    setCompletedCanvas(null);
+    setBottomOpen(true);
+  };
 
   return (
     <>
@@ -204,15 +250,10 @@ function WorkbenchPreview() {
         subtitle="Saved"
         toolbar={
           <Toolbar>
-            <Tooltip content="Add node"><IconButton label="Add node" active={nodeLibraryOpen} onClick={() => setNodeLibraryOpen(!nodeLibraryOpen)}><Blocks /></IconButton></Tooltip>
-            <Button variant="primary" size="small" leadingIcon={<Play />} onClick={() => setBottomOpen(true)}>Run</Button>
-            <Tooltip content="Run history"><IconButton label="Run history" active={runHistoryOpen} onClick={() => setRunHistoryOpen(!runHistoryOpen)}><History /></IconButton></Tooltip>
-            <ToolbarDivider />
-            <Tooltip content="Toggle run panel"><IconButton label="Toggle run panel" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
             <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
           </Toolbar>
         }
-        sidebar={<WorkspaceNavigation workspaceName={workspaceName} workspaceNames={workspaceNames} canvasName={canvasName} canvasNames={canvasNames} nodes={nodes} workspacesOpen={workspacesOpen} recentOpen={recentOpen} onToggleWorkspaces={() => setWorkspacesOpen(!workspacesOpen)} onToggleRecent={() => setRecentOpen(!recentOpen)} onNewWorkspace={openNewWorkspace} onAddCanvas={createCanvas} onSelectCanvas={setCanvasName} onRename={startRename} onDelete={setDeleteTarget} />}
+        sidebar={<WorkspaceNavigation workspaceName={workspaceName} workspaceNames={workspaceNames} canvasName={canvasName} canvasNames={canvasNames} nodes={nodes} canvasStates={canvasStates} workspacesOpen={workspacesOpen} recentOpen={recentOpen} onToggleWorkspaces={() => setWorkspacesOpen(!workspacesOpen)} onToggleRecent={() => setRecentOpen(!recentOpen)} onNewWorkspace={openNewWorkspace} onAddCanvas={createCanvas} onSelectCanvas={setCanvasName} onRename={startRename} onDelete={setDeleteTarget} onSetPrimary={setPrimaryNode} />}
         inspector={inspectorOpen ? <NodeInspector nodeName={nodes[1]?.name ?? nodes[0]?.name ?? "No node selected"} /> : undefined}
         bottomPanel={bottomOpen ? <RunPanel /> : undefined}
       >
@@ -227,13 +268,21 @@ function WorkbenchPreview() {
           onStart={() => setCanvasStarted(true)}
           onNewWorkspace={openNewWorkspace}
           nodeLibraryOpen={nodeLibraryOpen}
+          onToggleNodeLibrary={() => setNodeLibraryOpen(!nodeLibraryOpen)}
           onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
           runHistoryOpen={runHistoryOpen}
+          onToggleRunHistory={() => setRunHistoryOpen(!runHistoryOpen)}
           onCloseRunHistory={() => setRunHistoryOpen(false)}
           nodes={nodes}
           onAddNode={addNode}
+          canRun={nodes.some((node) => node.primary)}
+          runState={canvasStates[canvasName] ?? "idle"}
+          onRun={runCanvas}
+          onToggleRunPanel={() => setBottomOpen(!bottomOpen)}
+          runPanelOpen={bottomOpen}
         />
       </WindowFrame>
+      {completedCanvas ? <Notification title="Canvas completed" icon={<CheckCircle2 />} time="now" onDismiss={() => setCompletedCanvas(null)}>{completedCanvas} finished successfully. Review its output and artifacts.</Notification> : null}
       <Dialog
         open={newWorkspaceOpen}
         title="New Workspace"
@@ -282,6 +331,7 @@ interface WorkspaceNavigationProps {
   canvasName: string;
   canvasNames: string[];
   nodes: NodeSummary[];
+  canvasStates: Record<string, CanvasRuntimeState>;
   workspacesOpen: boolean;
   recentOpen: boolean;
   onToggleWorkspaces: () => void;
@@ -291,14 +341,16 @@ interface WorkspaceNavigationProps {
   onSelectCanvas: (canvasName: string) => void;
   onRename: (kind: ManagedKind, name: string, id?: string) => void;
   onDelete: (target: ManagedTarget) => void;
+  onSetPrimary: (nodeId: string) => void;
 }
 
-function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvasNames, nodes, workspacesOpen, recentOpen, onToggleWorkspaces, onToggleRecent, onNewWorkspace, onAddCanvas, onSelectCanvas, onRename, onDelete }: WorkspaceNavigationProps) {
+function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvasNames, nodes, canvasStates, workspacesOpen, recentOpen, onToggleWorkspaces, onToggleRecent, onNewWorkspace, onAddCanvas, onSelectCanvas, onRename, onDelete, onSetPrimary }: WorkspaceNavigationProps) {
   const [currentWorkspaceOpen, setCurrentWorkspaceOpen] = useState(true);
   const [currentCanvasOpen, setCurrentCanvasOpen] = useState(true);
   const [otherWorkspaceOpen, setOtherWorkspaceOpen] = useState<Record<string, boolean>>({});
   const currentCanvases = Array.from(new Set(canvasNames));
   const otherWorkspaces = workspaceNames.filter((name) => name !== workspaceName);
+  const currentWorkspaceState = aggregateCanvasState(currentCanvases.map((name) => canvasStates[name] ?? "idle"));
 
   return (
     <>
@@ -315,9 +367,10 @@ function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvas
           onAddCanvas={onAddCanvas}
           onRename={() => onRename("workspace", workspaceName)}
           onDelete={() => onDelete({ kind: "workspace", name: workspaceName })}
+          state={currentWorkspaceState}
           current
         >
-          {currentCanvases.map((name, index) => <CanvasRow key={`${name}-${index}`} name={name} active={name === canvasName} open={name === canvasName && currentCanvasOpen} onSelect={() => onSelectCanvas(name)} onToggle={() => { if (name !== canvasName) onSelectCanvas(name); setCurrentCanvasOpen(name === canvasName ? !currentCanvasOpen : true); }} onRename={() => onRename("canvas", name)} onDelete={() => onDelete({ kind: "canvas", name })} nodes={name === canvasName ? nodes : []} onNodeRename={(node) => onRename("node", node.name, node.id)} onNodeDelete={(node) => onDelete({ kind: "node", name: node.name, id: node.id })} />)}
+          {currentCanvases.map((name, index) => <CanvasRow key={`${name}-${index}`} name={name} state={canvasStates[name] ?? "idle"} active={name === canvasName} open={name === canvasName && currentCanvasOpen} onSelect={() => onSelectCanvas(name)} onToggle={() => { if (name !== canvasName) onSelectCanvas(name); setCurrentCanvasOpen(name === canvasName ? !currentCanvasOpen : true); }} onRename={() => onRename("canvas", name)} onDelete={() => onDelete({ kind: "canvas", name })} nodes={name === canvasName ? nodes : []} onNodeRename={(node) => onRename("node", node.name, node.id)} onNodeDelete={(node) => onDelete({ kind: "node", name: node.name, id: node.id })} onSetPrimary={onSetPrimary} />)}
           <button type="button" className="workspace-add-canvas" onClick={onAddCanvas}><Plus /><span>New Canvas</span></button>
           <div className="workspace-tools" aria-label={`${workspaceName} tools`}>
             <SidebarItem className="is-nested" icon={<Folder />}>Files</SidebarItem>
@@ -325,9 +378,9 @@ function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvas
             <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
           </div>
         </WorkspaceRow>
-        {otherWorkspaces.map((name) => <WorkspaceRow key={name} name={name} open={Boolean(otherWorkspaceOpen[name])} onToggle={() => setOtherWorkspaceOpen((open) => ({ ...open, [name]: !open[name] }))} onRename={() => onRename("workspace", name)} onDelete={() => onDelete({ kind: "workspace", name })}>
-          <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>{name === "OpenMAIC" ? "Java Course" : "Literature Survey"}</SidebarItem>
-          {name === "Research Workspace" ? <SidebarItem className="is-nested" icon={<PanelsTopLeft />}>Evaluation Plan</SidebarItem> : null}
+        {otherWorkspaces.map((name) => <WorkspaceRow key={name} name={name} state={name === "OpenMAIC" ? canvasStates["Java Course"] : aggregateCanvasState([canvasStates["Literature Survey"], canvasStates["Evaluation Plan"]])} open={Boolean(otherWorkspaceOpen[name])} onToggle={() => setOtherWorkspaceOpen((open) => ({ ...open, [name]: !open[name] }))} onRename={() => onRename("workspace", name)} onDelete={() => onDelete({ kind: "workspace", name })}>
+          <SidebarItem className="is-nested" icon={<PanelsTopLeft />} trailing={<CanvasRuntimeIcon state={name === "OpenMAIC" ? canvasStates["Java Course"] : canvasStates["Literature Survey"]} />}>{name === "OpenMAIC" ? "Java Course" : "Literature Survey"}</SidebarItem>
+          {name === "Research Workspace" ? <SidebarItem className="is-nested" icon={<PanelsTopLeft />} trailing={<CanvasRuntimeIcon state={canvasStates["Evaluation Plan"]} />}>Evaluation Plan</SidebarItem> : null}
         </WorkspaceRow>)}
       </SidebarDisclosure>
       <SidebarDisclosure label="Recent" open={recentOpen} onToggle={onToggleRecent}>
@@ -346,17 +399,19 @@ interface WorkspaceRowProps {
   onAddCanvas?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
+  state?: CanvasRuntimeState;
   current?: boolean;
   children: ReactNode;
 }
 
-function WorkspaceRow({ name, open, onToggle, onAddCanvas, onRename, onDelete, current = false, children }: WorkspaceRowProps) {
+function WorkspaceRow({ name, open, onToggle, onAddCanvas, onRename, onDelete, state = "idle", current = false, children }: WorkspaceRowProps) {
   return (
     <section className={`workspace-row ${open ? "is-open" : ""} ${current ? "is-current" : ""}`}>
       <div className="workspace-row__header">
         <button type="button" className="workspace-row__chevron" aria-label={`${open ? "Collapse" : "Expand"} ${name}`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button>
         <FolderOpen className="workspace-row__icon" aria-hidden="true" />
         <span className="workspace-row__name">{name}</span>
+        <CanvasRuntimeIcon state={state} />
         {onRename || onDelete ? <span className="workspace-row__actions">{current ? <Tooltip content="New canvas"><IconButton label="New canvas" size="small" onClick={onAddCanvas}><Plus /></IconButton></Tooltip> : null}<ObjectActions label={`${name} actions`} onRename={onRename} onDelete={onDelete} /></span> : null}
       </div>
       {open ? <div className="workspace-row__children">{children}</div> : null}
@@ -368,12 +423,17 @@ function SidebarDisclosure({ label, open, onToggle, children }: { label: string;
   return <section className={`sidebar-disclosure ${open ? "is-open" : ""}`}><header><strong>{label}</strong><button type="button" aria-label={`${open ? "Collapse" : "Expand"} ${label}`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button></header>{open ? <div>{children}</div> : null}</section>;
 }
 
-function CanvasRow({ name, active, open, onSelect, onToggle, onRename, onDelete, nodes, onNodeRename, onNodeDelete }: { name: string; active: boolean; open: boolean; onSelect: () => void; onToggle: () => void; onRename: () => void; onDelete: () => void; nodes: NodeSummary[]; onNodeRename: (node: NodeSummary) => void; onNodeDelete: (node: NodeSummary) => void }) {
-  return <div className={`canvas-row ${active ? "is-active" : ""} ${open ? "is-open" : ""}`}><div className="canvas-row__header"><button type="button" className="canvas-row__chevron" aria-label={`${open ? "Collapse" : "Expand"} ${name} nodes`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button><button type="button" className="canvas-row__select" onClick={onSelect}><PanelsTopLeft /><span>{name}</span></button><span className="canvas-row__actions"><ObjectActions label={`${name} actions`} onRename={onRename} onDelete={onDelete} /></span></div>{active && open ? <div className="node-preview-list">{nodes.map((node) => <NodePreviewRow key={node.id} name={node.name} onRename={() => onNodeRename(node)} onDelete={() => onNodeDelete(node)} />)}</div> : null}</div>;
+function CanvasRow({ name, state, active, open, onSelect, onToggle, onRename, onDelete, nodes, onNodeRename, onNodeDelete, onSetPrimary }: { name: string; state: CanvasRuntimeState; active: boolean; open: boolean; onSelect: () => void; onToggle: () => void; onRename: () => void; onDelete: () => void; nodes: NodeSummary[]; onNodeRename: (node: NodeSummary) => void; onNodeDelete: (node: NodeSummary) => void; onSetPrimary: (nodeId: string) => void }) {
+  return <div className={`canvas-row ${active ? "is-active" : ""} ${open ? "is-open" : ""}`}><div className="canvas-row__header"><button type="button" className="canvas-row__chevron" aria-label={`${open ? "Collapse" : "Expand"} ${name} nodes`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button><button type="button" className="canvas-row__select" onClick={onSelect}><PanelsTopLeft /><span>{name}</span></button><CanvasRuntimeIcon state={state} /><span className="canvas-row__actions"><ObjectActions label={`${name} actions`} onRename={onRename} onDelete={onDelete} /></span></div>{active && open ? <div className="node-preview-list">{nodes.map((node) => <NodePreviewRow key={node.id} node={node} onRename={() => onNodeRename(node)} onDelete={() => onNodeDelete(node)} onSetPrimary={() => onSetPrimary(node.id)} />)}</div> : null}</div>;
 }
 
-function NodePreviewRow({ name, onRename, onDelete }: { name: string; onRename: () => void; onDelete: () => void }) {
-  return <div className="node-preview-row"><Bot /><span>{name}</span><ObjectActions label={`${name} actions`} onRename={onRename} onDelete={onDelete} /></div>;
+function CanvasRuntimeIcon({ state = "idle" }: { state?: CanvasRuntimeState }) {
+  const Icon = state === "running" ? LoaderCircle : state === "success" ? CheckCircle2 : state === "waiting" ? Clock3 : state === "error" ? CircleAlert : CirclePlay;
+  return <Icon className={`canvas-runtime-icon is-${state}`} aria-label={{ idle: "Ready", running: "Running", waiting: "Waiting", success: "Completed", error: "Failed" }[state]} />;
+}
+
+function NodePreviewRow({ node, onRename, onDelete, onSetPrimary }: { node: NodeSummary; onRename: () => void; onDelete: () => void; onSetPrimary: () => void }) {
+  return <div className="node-preview-row"><Bot /><span>{node.name}</span>{node.primary ? <span className="node-preview-row__primary" title="Canvas entry node"><CirclePlay /></span> : <Tooltip content="Set as canvas entry node"><IconButton label={`Set ${node.name} as canvas entry node`} size="small" className="node-preview-row__set-primary" onClick={onSetPrimary}><CirclePlay /></IconButton></Tooltip>}<ObjectActions label={`${node.name} actions`} onRename={onRename} onDelete={onDelete} /></div>;
 }
 
 function ObjectActions({ label, onRename, onDelete }: { label: string; onRename?: () => void; onDelete?: () => void }) {
@@ -391,14 +451,21 @@ interface CanvasPreviewProps {
   onStart: () => void;
   onNewWorkspace: () => void;
   nodeLibraryOpen: boolean;
+  onToggleNodeLibrary: () => void;
   onCloseNodeLibrary: () => void;
   runHistoryOpen: boolean;
+  onToggleRunHistory: () => void;
   onCloseRunHistory: () => void;
   nodes: NodeSummary[];
   onAddNode: (name: string) => void;
+  canRun: boolean;
+  runState: CanvasRuntimeState;
+  onRun: () => void;
+  onToggleRunPanel: () => void;
+  runPanelOpen: boolean;
 }
 
-function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewWorkspace, nodeLibraryOpen, onCloseNodeLibrary, runHistoryOpen, onCloseRunHistory, nodes, onAddNode }: CanvasPreviewProps) {
+function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewWorkspace, nodeLibraryOpen, onToggleNodeLibrary, onCloseNodeLibrary, runHistoryOpen, onToggleRunHistory, onCloseRunHistory, nodes, onAddNode, canRun, runState, onRun, onToggleRunPanel, runPanelOpen }: CanvasPreviewProps) {
   const addNode = (nodeName: string) => {
     onAddNode(nodeName);
     onCloseNodeLibrary();
@@ -408,13 +475,19 @@ function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled
     <div className="canvas-preview">
       <div className="canvas-tabbar"><div className="canvas-tab is-active"><PanelsTopLeft /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
       <div className="canvas-breadcrumb"><span>{workspaceName}</span><ChevronRight /><strong>{canvasTitle}</strong></div>
+      <div className="canvas-actions" aria-label="Canvas actions">
+        <Tooltip content="Add node"><IconButton label="Add node" active={nodeLibraryOpen} onClick={onToggleNodeLibrary}><Blocks /></IconButton></Tooltip>
+        {canRun ? <Button variant="primary" size="small" leadingIcon={<Play />} onClick={onRun} disabled={runState === "running"}>{runState === "running" ? "Running" : "Run"}</Button> : null}
+        <Tooltip content="Run history"><IconButton label="Run history" active={runHistoryOpen} onClick={onToggleRunHistory}><History /></IconButton></Tooltip>
+        <Tooltip content="Toggle run output"><IconButton label="Toggle run output" active={runPanelOpen} onClick={onToggleRunPanel}><PanelBottom /></IconButton></Tooltip>
+      </div>
       <svg className="canvas-edges" aria-hidden="true" viewBox="0 0 900 480" preserveAspectRatio="none">
         <path d="M263 158 C330 158 320 195 385 195" />
         <path d="M605 195 C670 195 650 250 718 250" />
       </svg>
-      {nodes[0] ? <CanvasNode className="node-one" title={nodes[0].name} typeLabel="Text input" icon={<Type />} state="success" outputs={[{ id: "text", label: "Topic", kind: "data" }]} footer="128 chars" /> : null}
-      {nodes[1] ? <CanvasNode className="node-two" title={nodes[1].name} typeLabel="Agent task" icon={<Bot />} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data" }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data" }]} footer="Step 3 of 5" /> : null}
-      {nodes[2] ? <CanvasNode className="node-three" title={nodes[2].name} typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" /> : null}
+      {nodes[0] ? <CanvasNode className="node-one" title={nodes[0].name} typeLabel="Text input" icon={<Type />} primary={nodes[0].primary} state="success" outputs={[{ id: "text", label: "Topic", kind: "data", connectionCount: 3 }]} footer="128 chars" /> : null}
+      {nodes[1] ? <CanvasNode className="node-two" title={nodes[1].name} typeLabel="Agent task" icon={<Bot />} primary={nodes[1].primary} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data", connectionCount: 2 }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data", connectionCount: 4 }, { id: "outline", label: "Outline", kind: "data" }, { id: "sources", label: "Sources", kind: "resource" }, { id: "warnings", label: "Warnings", kind: "event" }, { id: "metrics", label: "Metrics", kind: "data" }, { id: "trace", label: "Execution trace", kind: "resource" }]} footer="Step 3 of 5" /> : null}
+      {nodes[2] ? <CanvasNode className="node-three" title={nodes[2].name} typeLabel="Human input" icon={<Pause />} primary={nodes[2].primary} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" /> : null}
       {nodes.slice(3).map((node, index) => <AddedCanvasNode key={node.id} name={node.name} index={index} />)}
       {nodeLibraryOpen ? <NodeLibrary onAdd={addNode} onClose={onCloseNodeLibrary} /> : null}
       {runHistoryOpen ? <RunHistoryPanel onClose={onCloseRunHistory} /> : null}
