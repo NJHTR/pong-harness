@@ -93,7 +93,7 @@ button, input { font: inherit; }
 .run-events i.waiting { background: var(--sk-warning); }
 
 .gallery-window { --sk-text-primary: #000; --sk-text-secondary: rgba(0,0,0,.62); --sk-text-tertiary: rgba(0,0,0,.25); position: relative; z-index: 1; width: 60%; height: 80%; min-height: 0; margin: 0; grid-template-rows: 28px minmax(0, 1fr) auto; border: 0; border-radius: 10px; background: #fff; box-shadow: 0 36px 100px rgba(0,0,0,.35), 0 0 3px rgba(0,0,0,.23), inset 0 0 3px rgba(255,255,255,.1); }
-.gallery-window .sk-titlebar { border: 0; background: rgb(245,245,245); box-shadow: 0 1px 0 rgba(0,0,0,.15); backdrop-filter: none; }
+.gallery-window .sk-titlebar { z-index: 2; border: 0; background: rgb(245,245,245); box-shadow: 0 1px 0 rgba(0,0,0,.15); backdrop-filter: none; }
 .gallery-window .sk-titlebar__title { font: 13px/normal "SFPro-Semibold", "PingFangSC-Semibold", var(--sk-font-sans); }
 .gallery-window .sk-titlebar__title strong { font-weight: 400; }
 .gallery-window .sk-workbench__main { overflow: hidden; background: #fff; }

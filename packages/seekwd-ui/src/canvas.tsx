@@ -36,7 +36,7 @@ export function CanvasNode({ title, typeLabel, icon, state = "idle", selected = 
       <header className="sk-node__header">
         <span className="sk-node__icon">{icon}</span>
         <span className="sk-node__heading"><strong>{title}</strong><small>{typeLabel}</small></span>
-        <IconButton label="节点操作" size="small"><MoreHorizontal /></IconButton>
+        <IconButton label="Node actions" size="small"><MoreHorizontal /></IconButton>
       </header>
       <div className="sk-node__ports">
         <div>{inputs.map((port) => <Port key={port.id} direction="input" {...port} />)}</div>

@@ -115,8 +115,10 @@
   .sk-button--quiet { border-color: transparent; background: transparent; box-shadow: none; }
   .sk-button--danger { color: white; background: var(--sk-danger); border-color: color-mix(in srgb, var(--sk-danger) 80%, black); }
   .sk-button__icon, .sk-button__icon svg { width: 14px; height: 14px; }
+  .sk-button__icon { display: grid; flex: 0 0 auto; place-items: center; line-height: 0; }
+  .sk-button > span:last-child { display: block; line-height: 1; }
 
-  .sk-icon-button { width: 26px; height: 26px; padding: 0; background: transparent; border-color: transparent; box-shadow: none; }
+  .sk-icon-button { width: 26px; height: 26px; padding: 0; line-height: 0; background: transparent; border-color: transparent; box-shadow: none; }
   .sk-icon-button.sk-control--small { width: 21px; height: 21px; }
   .sk-icon-button svg { width: 15px; height: 15px; stroke-width: 1.8; }
   .sk-icon-button.is-active { background: var(--sk-bg-selected); color: var(--sk-accent); }
@@ -248,7 +250,7 @@
   [data-sk-theme="dark"] .sk-macos-notification time { color: rgba(255,255,255,.52); }
 
   .sk-window { display: grid; grid-template-rows: 38px minmax(0, 1fr) auto; overflow: hidden; color: var(--sk-text-primary); background: var(--sk-bg-window); border: .5px solid var(--sk-border); border-radius: var(--sk-radius-window); box-shadow: var(--sk-shadow-window); font-family: var(--sk-font-sans); }
-  .sk-titlebar { min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; border-bottom: .5px solid var(--sk-divider); background: color-mix(in srgb, var(--sk-bg-panel) 88%, transparent); backdrop-filter: blur(28px) saturate(140%); user-select: none; }
+  .sk-titlebar { z-index: 2; min-width: 0; position: relative; display: flex; align-items: center; justify-content: center; border-bottom: 0; background: color-mix(in srgb, var(--sk-bg-panel) 88%, transparent); box-shadow: 0 1px 0 rgba(0,0,0,.15); backdrop-filter: blur(28px) saturate(140%); user-select: none; }
   .sk-traffic { position: absolute; top: 50%; left: 0; width: max-content; height: 12px; display: flex; align-items: center; padding-left: 8px; transform: translateY(-50%); }
   .sk-traffic__light { appearance: none; box-sizing: content-box; width: 12px; height: 12px; margin-right: 8px; padding: 0; display: grid; place-items: center; border: .5px solid rgba(0,0,0,.2); border-radius: 6px; cursor: default; }
   .sk-traffic__light svg { width: 100%; height: 100%; scale: .5; opacity: 0; fill: rgba(0,0,0,.8); transition: opacity 80ms ease; }

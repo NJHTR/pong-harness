@@ -305,7 +305,7 @@ export function Dialog({ open, title, description, children, onClose, footer }: 
     if (element) setPortalHost(element.closest<HTMLElement>("[data-sk-theme]") ?? document.body);
   }} />{portalHost ? createPortal(<dialog ref={ref} className="sk-dialog" aria-labelledby={titleId} onClose={onClose} onClick={(event) => {
     if (event.target === ref.current) onClose();
-  }}><header><strong id={titleId}>{title}</strong><IconButton label="关闭对话框" size="small" onClick={onClose}><X /></IconButton></header>{description ? <p className="sk-dialog__description">{description}</p> : null}<div className="sk-dialog__body">{children}</div>{footer ? <footer>{footer}</footer> : null}</dialog>, portalHost) : null}</>;
+  }}><header><strong id={titleId}>{title}</strong><IconButton label="Close dialog" size="small" onClick={onClose}><X /></IconButton></header>{description ? <p className="sk-dialog__description">{description}</p> : null}<div className="sk-dialog__body">{children}</div>{footer ? <footer>{footer}</footer> : null}</dialog>, portalHost) : null}</>;
 }
 
 export interface NoticeProps {
@@ -316,7 +316,7 @@ export interface NoticeProps {
 }
 
 export function Notice({ title, children, tone = "info", onDismiss }: NoticeProps) {
-  return <div className={`sk-notice sk-notice--${tone}`} role={tone === "danger" ? "alert" : "status"}><span className="sk-notice__marker" /><div><strong>{title}</strong><p>{children}</p></div>{onDismiss ? <IconButton label="关闭通知" size="small" onClick={onDismiss}><X /></IconButton> : null}</div>;
+  return <div className={`sk-notice sk-notice--${tone}`} role={tone === "danger" ? "alert" : "status"}><span className="sk-notice__marker" /><div><strong>{title}</strong><p>{children}</p></div>{onDismiss ? <IconButton label="Dismiss notice" size="small" onClick={onDismiss}><X /></IconButton> : null}</div>;
 }
 
 export interface MessageBoxProps {
@@ -329,7 +329,7 @@ export interface MessageBoxProps {
 }
 
 /** A compact, icon-led confirmation surface matching the WebSwift/macOS reference. */
-export function MessageBox({ open, title, children, icon, actionLabel = "好", onClose }: MessageBoxProps) {
+export function MessageBox({ open, title, children, icon, actionLabel = "OK", onClose }: MessageBoxProps) {
   const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();

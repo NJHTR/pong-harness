@@ -82,15 +82,15 @@ function WorkbenchPreview() {
   return (
     <WindowFrame
       className={`lab-window ${inspectorOpen ? "" : "hide-inspector"}`}
-      title="论文写作"
-      subtitle="已保存"
+      title="Thesis Workspace"
+      subtitle="Saved"
       toolbar={
         <Toolbar>
-          <Tooltip content="添加节点"><IconButton label="添加节点"><Plus /></IconButton></Tooltip>
-          <Button variant="primary" size="small" leadingIcon={<Play />}>运行</Button>
+          <Tooltip content="Add node"><IconButton label="Add node"><Plus /></IconButton></Tooltip>
+          <Button variant="primary" size="small" leadingIcon={<Play />}>Run</Button>
           <ToolbarDivider />
-          <Tooltip content="切换运行面板"><IconButton label="切换运行面板" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
-          <Tooltip content="切换检查器"><IconButton label="切换检查器" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
+          <Tooltip content="Toggle run panel"><IconButton label="Toggle run panel" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
+          <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
         </Toolbar>
       }
       sidebar={<WorkspaceNavigation />}
@@ -105,23 +105,23 @@ function WorkbenchPreview() {
 function WorkspaceNavigation() {
   return (
     <>
-      <div className="workspace-title"><FolderOpen /><span><strong>论文工作区</strong><small>D:\Documents\Thesis</small></span><IconButton label="工作区操作" size="small"><MoreHorizontal /></IconButton></div>
-      <SidebarSection label="工作区">
-        <SidebarItem icon={<Workflow />} active trailing="3">画布</SidebarItem>
-        <SidebarItem icon={<CirclePlay />} trailing="1">运行</SidebarItem>
-        <SidebarItem icon={<Folder />} trailing="12">文件</SidebarItem>
+      <div className="workspace-title"><FolderOpen /><span><strong>Thesis Workspace</strong><small>D:\Documents\Thesis</small></span><IconButton label="Workspace actions" size="small"><MoreHorizontal /></IconButton></div>
+      <SidebarSection label="Workspace">
+        <SidebarItem icon={<Workflow />} active trailing="3">Canvases</SidebarItem>
+        <SidebarItem icon={<CirclePlay />} trailing="1">Runs</SidebarItem>
+        <SidebarItem icon={<Folder />} trailing="12">Files</SidebarItem>
       </SidebarSection>
-      <SidebarSection label="资源">
-        <SidebarItem icon={<Gauge />}>环境</SidebarItem>
-        <SidebarItem icon={<Box />}>扩展</SidebarItem>
+      <SidebarSection label="Resources">
+        <SidebarItem icon={<Gauge />}>Environments</SidebarItem>
+        <SidebarItem icon={<Box />}>Extensions</SidebarItem>
         <SidebarItem icon={<Bot />}>Agents</SidebarItem>
       </SidebarSection>
-      <SidebarSection label="画布">
-        <SidebarItem icon={<ChevronRight />} active>实验报告生成</SidebarItem>
-        <SidebarItem icon={<ChevronRight />}>资料分析</SidebarItem>
-        <SidebarItem icon={<ChevronRight />}>引用检查</SidebarItem>
+      <SidebarSection label="Canvases">
+        <SidebarItem icon={<ChevronRight />} active>Experiment Report</SidebarItem>
+        <SidebarItem icon={<ChevronRight />}>Source Analysis</SidebarItem>
+        <SidebarItem icon={<ChevronRight />}>Citation Review</SidebarItem>
       </SidebarSection>
-      <div className="sidebar-footer"><SidebarItem icon={<Settings />}>设置</SidebarItem></div>
+      <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
     </>
   );
 }
@@ -129,15 +129,15 @@ function WorkspaceNavigation() {
 function CanvasPreview() {
   return (
     <div className="canvas-preview">
-      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>实验报告生成</span><i /></div><button aria-label="新建标签页"><Plus /></button></div>
-      <div className="canvas-breadcrumb"><span>论文工作区</span><ChevronRight /><strong>实验报告生成</strong></div>
+      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>Experiment Report</span><i /></div><button aria-label="New canvas tab"><Plus /></button></div>
+      <div className="canvas-breadcrumb"><span>Thesis Workspace</span><ChevronRight /><strong>Experiment Report</strong></div>
       <svg className="canvas-edges" aria-hidden="true" viewBox="0 0 900 480" preserveAspectRatio="none">
         <path d="M263 158 C330 158 320 195 385 195" />
         <path d="M605 195 C670 195 650 250 718 250" />
       </svg>
-      <CanvasNode className="node-one" title="研究主题" typeLabel="文字输入" icon={<Type />} state="success" outputs={[{ id: "text", label: "主题", kind: "data" }]} footer="128 字" />
-      <CanvasNode className="node-two" title="撰写实验报告" typeLabel="Agent 任务" icon={<Bot />} state="running" selected inputs={[{ id: "prompt", label: "主题", kind: "data" }, { id: "start", label: "开始", kind: "flow" }]} outputs={[{ id: "draft", label: "草稿", kind: "data" }]} footer="步骤 3 / 5" />
-      <CanvasNode className="node-three" title="确认报告结构" typeLabel="人工输入" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "草稿", kind: "data" }]} outputs={[{ id: "approved", label: "确认", kind: "event" }]} footer="需要操作" />
+      <CanvasNode className="node-one" title="Research Topic" typeLabel="Text input" icon={<Type />} state="success" outputs={[{ id: "text", label: "Topic", kind: "data" }]} footer="128 chars" />
+      <CanvasNode className="node-two" title="Draft Experiment Report" typeLabel="Agent task" icon={<Bot />} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data" }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data" }]} footer="Step 3 of 5" />
+      <CanvasNode className="node-three" title="Review Report Structure" typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" />
       <div className="canvas-zoom"><button>−</button><span>100%</span><button>+</button></div>
     </div>
   );
@@ -146,21 +146,21 @@ function CanvasPreview() {
 function NodeInspector() {
   return (
     <>
-      <PanelHeader title="检查器" trailing={<IconButton label="检查器操作" size="small"><MoreHorizontal /></IconButton>} />
-      <div className="inspector-summary"><span className="summary-icon"><Bot /></span><span><strong>撰写实验报告</strong><small>Agent 任务</small></span></div>
-      <InspectorSection title="常规">
-        <PropertyRow label="名称"><TextField defaultValue="撰写实验报告" aria-label="节点名称" /></PropertyRow>
-        <PropertyRow label="说明" vertical><TextField defaultValue="根据输入主题和资料撰写结构化实验报告" aria-label="节点说明" /></PropertyRow>
+      <PanelHeader title="Inspector" trailing={<IconButton label="Inspector actions" size="small"><MoreHorizontal /></IconButton>} />
+      <div className="inspector-summary"><span className="summary-icon"><Bot /></span><span><strong>Draft Experiment Report</strong><small>Agent task</small></span></div>
+      <InspectorSection title="General">
+        <PropertyRow label="Name"><TextField defaultValue="Draft Experiment Report" aria-label="Node name" /></PropertyRow>
+        <PropertyRow label="Description" vertical><TextField defaultValue="Draft a structured experiment report from the topic and source material." aria-label="Node description" /></PropertyRow>
       </InspectorSection>
-      <InspectorSection title="执行">
+      <InspectorSection title="Execution">
         <PropertyRow label="Agent"><span className="value-select">Pong Agent <ChevronRight /></span></PropertyRow>
-        <PropertyRow label="模式"><span className="value-select">协同执行 <ChevronRight /></span></PropertyRow>
-        <Switch label="失败时自动修复" description="允许 Agent 提交修复建议" defaultChecked />
+        <PropertyRow label="Mode"><span className="value-select">Collaborative <ChevronRight /></span></PropertyRow>
+        <Switch label="Repair on failure" description="Allow the Agent to submit repair proposals" defaultChecked />
       </InspectorSection>
-      <InspectorSection title="端口">
-        <div className="port-row"><i className="port data" /><span>主题</span><code>string</code></div>
-        <div className="port-row"><i className="port flow" /><span>开始</span><code>flow</code></div>
-        <div className="port-row"><i className="port data" /><span>草稿</span><code>artifact</code></div>
+      <InspectorSection title="Ports">
+        <div className="port-row"><i className="port data" /><span>Topic</span><code>string</code></div>
+        <div className="port-row"><i className="port flow" /><span>Start</span><code>flow</code></div>
+        <div className="port-row"><i className="port data" /><span>Draft</span><code>artifact</code></div>
       </InspectorSection>
     </>
   );
@@ -169,13 +169,13 @@ function NodeInspector() {
 function RunPanel() {
   return (
     <div className="run-panel">
-      <PanelHeader title="运行输出" trailing={<Toolbar><StatusBadge tone="info" dot>运行中</StatusBadge><IconButton label="暂停运行" size="small"><Pause /></IconButton><IconButton label="运行操作" size="small"><MoreHorizontal /></IconButton></Toolbar>} />
+      <PanelHeader title="Run output" trailing={<Toolbar><StatusBadge tone="info" dot>Running</StatusBadge><IconButton label="Pause run" size="small"><Pause /></IconButton><IconButton label="Run actions" size="small"><MoreHorizontal /></IconButton></Toolbar>} />
       <div className="run-content">
-        <div className="run-tabs"><button className="is-active">事件</button><button>日志</button><button>问题 <span>0</span></button></div>
+        <div className="run-tabs"><button className="is-active">Events</button><button>Logs</button><button>Issues <span>0</span></button></div>
         <div className="run-events">
-          <p><time>19:24:03</time><i className="success" /><span>完成：研究主题</span><small>12 ms</small></p>
-          <p><time>19:24:04</time><i className="running" /><span>正在执行：撰写实验报告</span><small>18.4 s</small></p>
-          <p><time>19:24:22</time><i className="waiting" /><span>下一步需要确认报告结构</span></p>
+          <p><time>19:24:03</time><i className="success" /><span>Completed: Research Topic</span><small>12 ms</small></p>
+          <p><time>19:24:04</time><i className="running" /><span>Running: Draft Experiment Report</span><small>18.4 s</small></p>
+          <p><time>19:24:22</time><i className="waiting" /><span>Waiting for report structure review</span></p>
         </div>
       </div>
     </div>
