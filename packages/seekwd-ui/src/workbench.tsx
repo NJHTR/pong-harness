@@ -64,6 +64,30 @@ export function SidebarSection({ label, children }: SidebarSectionProps) {
   return <section className="sk-sidebar-section"><h3>{label}</h3>{children}</section>;
 }
 
+export interface SidebarGroupProps {
+  label: ReactNode;
+  icon?: ReactNode;
+  trailing?: ReactNode;
+  active?: boolean;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}
+
+/** A compact disclosure group for second-level workspace navigation. */
+export function SidebarGroup({ label, icon, trailing, active = false, defaultOpen = false, children }: SidebarGroupProps) {
+  return (
+    <details className={`sk-sidebar-group ${active ? "is-active" : ""}`} open={defaultOpen}>
+      <summary>
+        {icon ? <span className="sk-sidebar-group__icon">{icon}</span> : <span />}
+        <span className="sk-sidebar-group__label">{label}</span>
+        {trailing ? <span className="sk-sidebar-group__trailing">{trailing}</span> : null}
+        <ChevronRight className="sk-sidebar-group__chevron" aria-hidden="true" />
+      </summary>
+      <div className="sk-sidebar-group__children">{children}</div>
+    </details>
+  );
+}
+
 export interface SidebarItemProps extends HTMLAttributes<HTMLButtonElement> {
   icon?: ReactNode;
   active?: boolean;

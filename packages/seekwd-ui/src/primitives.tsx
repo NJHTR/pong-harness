@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, CircleCheck, Clock3, LoaderCircle, X } from "lucide-react";
 
 type ButtonVariant = "default" | "primary" | "quiet" | "danger";
 type ControlSize = "small" | "medium";
@@ -213,11 +213,25 @@ export function SegmentedControl<T extends string>({ value, options, onChange, l
 
 export interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  /** Retained for API compatibility. When enabled, renders a semantic SVG status icon. */
   dot?: boolean;
 }
 
 export function StatusBadge({ tone = "neutral", dot = false, className = "", children, ...props }: StatusBadgeProps) {
-  return <span className={`sk-status sk-status--${tone} ${className}`} {...props}>{dot ? <i /> : null}{children}</span>;
+  const StatusIcon = tone === "info"
+    ? LoaderCircle
+    : tone === "success"
+      ? Check
+      : tone === "warning"
+        ? Clock3
+        : tone === "danger"
+          ? CircleAlert
+          : CircleCheck;
+
+  return <span className={`sk-status sk-status--${tone} ${className}`} {...props}>
+    {dot ? <StatusIcon className="sk-status__icon" aria-hidden="true" /> : null}
+    {children}
+  </span>;
 }
 
 export interface TooltipProps {

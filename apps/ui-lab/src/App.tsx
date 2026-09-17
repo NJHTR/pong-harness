@@ -4,9 +4,11 @@ import {
   Box,
   ChevronRight,
   CirclePlay,
+  Database,
   Folder,
   FolderOpen,
   Gauge,
+  Minus,
   Moon,
   MoreHorizontal,
   PanelBottom,
@@ -19,6 +21,7 @@ import {
   Sun,
   Type,
   Workflow,
+  Zap,
 } from "lucide-react";
 import {
   Button,
@@ -34,6 +37,7 @@ import {
   PropertyRow,
   SegmentedControl,
   SidebarItem,
+  SidebarGroup,
   SidebarSection,
   StatusBadge,
   Switch,
@@ -107,19 +111,18 @@ function WorkspaceNavigation() {
     <>
       <div className="workspace-title"><FolderOpen /><span><strong>Thesis Workspace</strong><small>D:\Documents\Thesis</small></span><IconButton label="Workspace actions" size="small"><MoreHorizontal /></IconButton></div>
       <SidebarSection label="Workspace">
-        <SidebarItem icon={<Workflow />} active trailing="3">Canvases</SidebarItem>
+        <SidebarGroup icon={<Workflow />} active trailing="3" label="Canvases" defaultOpen>
+          <SidebarItem className="is-nested" icon={<Workflow />} active>Experiment Report</SidebarItem>
+          <SidebarItem className="is-nested" icon={<Workflow />}>Source Analysis</SidebarItem>
+          <SidebarItem className="is-nested" icon={<Workflow />}>Citation Review</SidebarItem>
+        </SidebarGroup>
         <SidebarItem icon={<CirclePlay />} trailing="1">Runs</SidebarItem>
         <SidebarItem icon={<Folder />} trailing="12">Files</SidebarItem>
-      </SidebarSection>
-      <SidebarSection label="Resources">
-        <SidebarItem icon={<Gauge />}>Environments</SidebarItem>
-        <SidebarItem icon={<Box />}>Extensions</SidebarItem>
-        <SidebarItem icon={<Bot />}>Agents</SidebarItem>
-      </SidebarSection>
-      <SidebarSection label="Canvases">
-        <SidebarItem icon={<ChevronRight />} active>Experiment Report</SidebarItem>
-        <SidebarItem icon={<ChevronRight />}>Source Analysis</SidebarItem>
-        <SidebarItem icon={<ChevronRight />}>Citation Review</SidebarItem>
+        <SidebarGroup icon={<Box />} label="Resources">
+          <SidebarItem className="is-nested" icon={<Gauge />}>Environments</SidebarItem>
+          <SidebarItem className="is-nested" icon={<Box />}>Extensions</SidebarItem>
+          <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
+        </SidebarGroup>
       </SidebarSection>
       <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
     </>
@@ -129,7 +132,7 @@ function WorkspaceNavigation() {
 function CanvasPreview() {
   return (
     <div className="canvas-preview">
-      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>Experiment Report</span><i /></div><button aria-label="New canvas tab"><Plus /></button></div>
+      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>Experiment Report</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
       <div className="canvas-breadcrumb"><span>Thesis Workspace</span><ChevronRight /><strong>Experiment Report</strong></div>
       <svg className="canvas-edges" aria-hidden="true" viewBox="0 0 900 480" preserveAspectRatio="none">
         <path d="M263 158 C330 158 320 195 385 195" />
@@ -138,7 +141,7 @@ function CanvasPreview() {
       <CanvasNode className="node-one" title="Research Topic" typeLabel="Text input" icon={<Type />} state="success" outputs={[{ id: "text", label: "Topic", kind: "data" }]} footer="128 chars" />
       <CanvasNode className="node-two" title="Draft Experiment Report" typeLabel="Agent task" icon={<Bot />} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data" }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data" }]} footer="Step 3 of 5" />
       <CanvasNode className="node-three" title="Review Report Structure" typeLabel="Human input" icon={<Pause />} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" />
-      <div className="canvas-zoom"><button>−</button><span>100%</span><button>+</button></div>
+      <div className="canvas-zoom"><button aria-label="Zoom out" title="Zoom out"><Minus /></button><span>100%</span><button aria-label="Zoom in" title="Zoom in"><Plus /></button></div>
     </div>
   );
 }
@@ -158,9 +161,9 @@ function NodeInspector() {
         <Switch label="Repair on failure" description="Allow the Agent to submit repair proposals" defaultChecked />
       </InspectorSection>
       <InspectorSection title="Ports">
-        <div className="port-row"><i className="port data" /><span>Topic</span><code>string</code></div>
-        <div className="port-row"><i className="port flow" /><span>Start</span><code>flow</code></div>
-        <div className="port-row"><i className="port data" /><span>Draft</span><code>artifact</code></div>
+        <div className="port-row"><Database className="port-icon data" aria-hidden="true" /><span>Topic</span><code>string</code></div>
+        <div className="port-row"><Zap className="port-icon flow" aria-hidden="true" /><span>Start</span><code>flow</code></div>
+        <div className="port-row"><Database className="port-icon data" aria-hidden="true" /><span>Draft</span><code>artifact</code></div>
       </InspectorSection>
     </>
   );
@@ -173,9 +176,9 @@ function RunPanel() {
       <div className="run-content">
         <div className="run-tabs"><button className="is-active">Events</button><button>Logs</button><button>Issues <span>0</span></button></div>
         <div className="run-events">
-          <p><time>19:24:03</time><i className="success" /><span>Completed: Research Topic</span><small>12 ms</small></p>
-          <p><time>19:24:04</time><i className="running" /><span>Running: Draft Experiment Report</span><small>18.4 s</small></p>
-          <p><time>19:24:22</time><i className="waiting" /><span>Waiting for report structure review</span></p>
+          <p><time>19:24:03</time><StatusBadge tone="success" dot aria-label="Completed" /><span>Completed: Research Topic</span><small>12 ms</small></p>
+          <p><time>19:24:04</time><StatusBadge tone="info" dot aria-label="Running" /><span>Running: Draft Experiment Report</span><small>18.4 s</small></p>
+          <p><time>19:24:22</time><StatusBadge tone="warning" dot aria-label="Waiting" /><span>Waiting for report structure review</span></p>
         </div>
       </div>
     </div>

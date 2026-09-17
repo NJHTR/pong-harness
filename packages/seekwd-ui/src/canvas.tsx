@@ -1,5 +1,5 @@
 import { type HTMLAttributes, type ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { ArrowRight, Database, MoreHorizontal, Package, Zap } from "lucide-react";
 import { IconButton, StatusBadge } from "./primitives";
 
 export type NodeState = "idle" | "running" | "waiting" | "success" | "error";
@@ -52,5 +52,6 @@ export interface PortProps extends NodePort {
 }
 
 export function Port({ label, kind = "data", direction }: PortProps) {
-  return <div className={`sk-port sk-port--${direction} sk-port--${kind}`}><i /><span>{label}</span></div>;
+  const PortIcon = kind === "flow" ? ArrowRight : kind === "event" ? Zap : kind === "resource" ? Package : Database;
+  return <div className={`sk-port sk-port--${direction} sk-port--${kind}`}><PortIcon className="sk-port__icon" aria-hidden="true" /><span>{label}</span></div>;
 }
