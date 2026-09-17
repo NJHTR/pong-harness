@@ -4,7 +4,8 @@ import {
   Box,
   ChevronRight,
   CirclePlay,
-  Database,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Folder,
   FolderOpen,
   Gauge,
@@ -27,6 +28,7 @@ import {
   Button,
   CanvasNode,
   Checkbox,
+  Dialog,
   IconButton,
   InspectorSection,
   Menu,
@@ -82,58 +84,107 @@ export function App() {
 function WorkbenchPreview() {
   const [bottomOpen, setBottomOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [workspaceName, setWorkspaceName] = useState("Thesis Workspace");
+  const [projectName, setProjectName] = useState("Experiment Report");
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [draftProjectName, setDraftProjectName] = useState("");
+  const [draftWorkspace, setDraftWorkspace] = useState("");
+
+  const createProject = () => {
+    const nextName = draftProjectName.trim();
+    if (!nextName || !draftWorkspace) return;
+    setWorkspaceName(draftWorkspace);
+    setProjectName(nextName);
+    setDraftProjectName("");
+    setNewProjectOpen(false);
+  };
 
   return (
-    <WindowFrame
-      className={`lab-window ${inspectorOpen ? "" : "hide-inspector"}`}
-      title="Thesis Workspace"
-      subtitle="Saved"
-      toolbar={
-        <Toolbar>
-          <Tooltip content="Add node"><IconButton label="Add node"><Plus /></IconButton></Tooltip>
-          <Button variant="primary" size="small" leadingIcon={<Play />}>Run</Button>
-          <ToolbarDivider />
-          <Tooltip content="Toggle run panel"><IconButton label="Toggle run panel" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
-          <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
-        </Toolbar>
-      }
-      sidebar={<WorkspaceNavigation />}
-      inspector={inspectorOpen ? <NodeInspector /> : undefined}
-      bottomPanel={bottomOpen ? <RunPanel /> : undefined}
-    >
-      <CanvasPreview />
-    </WindowFrame>
+    <>
+      <WindowFrame
+        className={`lab-window ${inspectorOpen ? "" : "hide-inspector"}`}
+        title={workspaceName}
+        subtitle="Saved"
+        toolbar={
+          <Toolbar>
+            <Tooltip content="Add node"><IconButton label="Add node"><Plus /></IconButton></Tooltip>
+            <Button variant="primary" size="small" leadingIcon={<Play />}>Run</Button>
+            <ToolbarDivider />
+            <Tooltip content="Toggle run panel"><IconButton label="Toggle run panel" active={bottomOpen} onClick={() => setBottomOpen(!bottomOpen)}><PanelBottom /></IconButton></Tooltip>
+            <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
+          </Toolbar>
+        }
+        sidebar={<WorkspaceNavigation workspaceName={workspaceName} projectName={projectName} onWorkspaceChange={setWorkspaceName} onNewProject={() => { setDraftWorkspace(""); setNewProjectOpen(true); }} />}
+        inspector={inspectorOpen ? <NodeInspector /> : undefined}
+        bottomPanel={bottomOpen ? <RunPanel /> : undefined}
+      >
+        <CanvasPreview workspaceName={workspaceName} canvasTitle={projectName} />
+      </WindowFrame>
+      <Dialog
+        open={newProjectOpen}
+        title="New Project"
+        description="Choose a workspace. A project starts with a default canvas."
+        onClose={() => setNewProjectOpen(false)}
+        footer={<><Button onClick={() => setNewProjectOpen(false)}>Cancel</Button><Button variant="primary" disabled={!draftProjectName.trim() || !draftWorkspace} onClick={createProject}>Create Project</Button></>}
+      >
+        <div className="new-project-form">
+          <TextField label="Project name" autoFocus placeholder="Untitled Project" value={draftProjectName} onChange={(event) => setDraftProjectName(event.target.value)} />
+          <SegmentedControl
+            label="Workspace"
+            value={draftWorkspace}
+            onChange={setDraftWorkspace}
+            options={[
+              { value: "Thesis Workspace", label: "Thesis Workspace" },
+              { value: "Research Workspace", label: "Research Workspace" },
+            ]}
+          />
+        </div>
+      </Dialog>
+    </>
   );
 }
 
-function WorkspaceNavigation() {
+function WorkspaceNavigation({ workspaceName, projectName, onWorkspaceChange, onNewProject }: { workspaceName: string; projectName: string; onWorkspaceChange: (name: string) => void; onNewProject: () => void }) {
   return (
     <>
-      <div className="workspace-title"><FolderOpen /><span><strong>Thesis Workspace</strong><small>D:\Documents\Thesis</small></span><IconButton label="Workspace actions" size="small"><MoreHorizontal /></IconButton></div>
+      <div className="workspace-title">
+        <span className="workspace-title__copy">
+          <Menu
+            label={workspaceName}
+            icon={<FolderOpen />}
+            items={[
+              { label: "Thesis Workspace", icon: <FolderOpen />, checked: workspaceName === "Thesis Workspace", onSelect: () => onWorkspaceChange("Thesis Workspace") },
+              { label: "Research Workspace", icon: <FolderOpen />, checked: workspaceName === "Research Workspace", onSelect: () => onWorkspaceChange("Research Workspace") },
+            ]}
+          />
+          <small>{workspaceName === "Thesis Workspace" ? "D:\\Documents\\Thesis" : "D:\\Documents\\Research"}</small>
+        </span>
+        <IconButton label="New project" size="small" onClick={onNewProject}><Plus /></IconButton>
+      </div>
       <SidebarSection label="Workspace">
-        <SidebarGroup icon={<Workflow />} active trailing="3" label="Canvases" defaultOpen>
-          <SidebarItem className="is-nested" icon={<Workflow />} active>Experiment Report</SidebarItem>
+        <SidebarGroup icon={<Workflow />} trailing="3" label="Canvases" defaultOpen>
+          <SidebarItem className="is-nested" icon={<Workflow />} active>{projectName}</SidebarItem>
           <SidebarItem className="is-nested" icon={<Workflow />}>Source Analysis</SidebarItem>
           <SidebarItem className="is-nested" icon={<Workflow />}>Citation Review</SidebarItem>
         </SidebarGroup>
         <SidebarItem icon={<CirclePlay />} trailing="1">Runs</SidebarItem>
         <SidebarItem icon={<Folder />} trailing="12">Files</SidebarItem>
-        <SidebarGroup icon={<Box />} label="Resources">
-          <SidebarItem className="is-nested" icon={<Gauge />}>Environments</SidebarItem>
-          <SidebarItem className="is-nested" icon={<Box />}>Extensions</SidebarItem>
-          <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
-        </SidebarGroup>
+      </SidebarSection>
+      <SidebarSection label="Resources">
+        <SidebarItem icon={<Gauge />}>Environments</SidebarItem>
+        <SidebarItem icon={<Box />}>Extensions</SidebarItem>
+        <SidebarItem icon={<Bot />}>Agents</SidebarItem>
       </SidebarSection>
       <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
     </>
   );
 }
 
-function CanvasPreview() {
+function CanvasPreview({ workspaceName, canvasTitle }: { workspaceName: string; canvasTitle: string }) {
   return (
     <div className="canvas-preview">
-      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>Experiment Report</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
-      <div className="canvas-breadcrumb"><span>Thesis Workspace</span><ChevronRight /><strong>Experiment Report</strong></div>
+      <div className="canvas-tabbar"><div className="canvas-tab is-active"><Workflow /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
+      <div className="canvas-breadcrumb"><span>{workspaceName}</span><ChevronRight /><strong>{canvasTitle}</strong></div>
       <svg className="canvas-edges" aria-hidden="true" viewBox="0 0 900 480" preserveAspectRatio="none">
         <path d="M263 158 C330 158 320 195 385 195" />
         <path d="M605 195 C670 195 650 250 718 250" />
@@ -161,9 +212,9 @@ function NodeInspector() {
         <Switch label="Repair on failure" description="Allow the Agent to submit repair proposals" defaultChecked />
       </InspectorSection>
       <InspectorSection title="Ports">
-        <div className="port-row"><Database className="port-icon data" aria-hidden="true" /><span>Topic</span><code>string</code></div>
+        <div className="port-row"><ArrowDownToLine className="port-icon data" aria-hidden="true" /><span>Topic</span><code>string</code></div>
         <div className="port-row"><Zap className="port-icon flow" aria-hidden="true" /><span>Start</span><code>flow</code></div>
-        <div className="port-row"><Database className="port-icon data" aria-hidden="true" /><span>Draft</span><code>artifact</code></div>
+        <div className="port-row"><ArrowUpFromLine className="port-icon output" aria-hidden="true" /><span>Draft</span><code>artifact</code></div>
       </InspectorSection>
     </>
   );

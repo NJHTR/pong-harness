@@ -77,7 +77,7 @@ export interface SidebarGroupProps {
 export function SidebarGroup({ label, icon, trailing, active = false, defaultOpen = false, children }: SidebarGroupProps) {
   return (
     <details className={`sk-sidebar-group ${active ? "is-active" : ""}`} open={defaultOpen}>
-      <summary>
+      <summary aria-current={active ? "page" : undefined}>
         {icon ? <span className="sk-sidebar-group__icon">{icon}</span> : <span />}
         <span className="sk-sidebar-group__label">{label}</span>
         {trailing ? <span className="sk-sidebar-group__trailing">{trailing}</span> : null}
