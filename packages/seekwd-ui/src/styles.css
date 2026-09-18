@@ -327,15 +327,15 @@
   .sk-node__entry-icon { width: 13px; height: 13px; flex: 0 0 13px; color: var(--sk-text-tertiary); }
   .sk-node__header .sk-icon-button { width: 25px; min-width: 25px; min-height: 25px; border: 0; box-shadow: none; background: transparent; }
   .sk-node__header .sk-icon-button svg { width: 15px; height: 15px; }
-  .sk-node__body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 10px 0 11px; min-height: 58px; }
+  .sk-node__body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 10px 10px 11px; min-height: 58px; }
   .sk-node__lane { min-width: 0; display: grid; align-content: start; }
   .sk-node__lane--input { padding-right: 2px; }
   .sk-node__lane--output { padding-left: 2px; }
   .sk-port-group { min-width: 0; display: grid; align-content: start; gap: 7px; }
   .sk-port { position: relative; min-width: 0; min-height: 18px; display: flex; align-items: center; gap: 6px; color: var(--sk-text-secondary); font-size: 10px; line-height: 1.2; }
   .sk-port__icon { width: 12px; height: 12px; flex: 0 0 12px; color: var(--sk-accent); stroke-width: 1.7; }
-  .sk-port--input { left: -6px; }
-  .sk-port--output { right: -6px; flex-direction: row-reverse; text-align: right; }
+  .sk-port--input { justify-content: flex-start; }
+  .sk-port--output { flex-direction: row-reverse; justify-content: flex-start; text-align: right; }
   .sk-port--flow .sk-port__icon { color: var(--sk-success); }
   .sk-port--event .sk-port__icon { color: var(--sk-warning); }
   .sk-port--resource .sk-port__icon { color: #b184e8; }
