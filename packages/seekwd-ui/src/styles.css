@@ -333,12 +333,17 @@
   .sk-node__lane--output { padding-left: 2px; }
   .sk-port-group { min-width: 0; display: grid; align-content: start; gap: 7px; }
   .sk-port { position: relative; min-width: 0; min-height: 18px; display: flex; align-items: center; gap: 6px; color: var(--sk-text-secondary); font-size: 10px; line-height: 1.2; }
-  .sk-port__icon { width: 12px; height: 12px; flex: 0 0 12px; color: var(--sk-accent); stroke-width: 1.7; }
+  .sk-port__socket { width: 16px; height: 16px; flex: 0 0 16px; padding: 0; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--sk-accent) 42%, var(--sk-border)); border-radius: 5px; color: var(--sk-accent); background: var(--sk-bg-node); cursor: crosshair; transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease; }
+  .sk-port__socket svg { width: 10px; height: 10px; stroke-width: 1.8; }
+  .sk-port .sk-port__socket:hover, .sk-port .sk-port__socket:focus-visible { color: #fff; border-color: var(--sk-accent); outline: 0; background: var(--sk-accent); box-shadow: 0 0 0 3px var(--sk-focus-ring); }
+  .sk-port .sk-port__socket.is-active { color: #fff; border-color: var(--sk-accent); background: var(--sk-accent); box-shadow: 0 0 0 3px var(--sk-focus-ring); }
+  .sk-port.is-connected .sk-port__socket { border-color: color-mix(in srgb, var(--sk-accent) 72%, var(--sk-border)); }
+  .sk-port.is-accepting .sk-port__socket { border-color: var(--sk-accent); box-shadow: 0 0 0 2px var(--sk-focus-ring); }
   .sk-port--input { justify-content: flex-start; }
   .sk-port--output { flex-direction: row-reverse; justify-content: flex-start; text-align: right; }
-  .sk-port--flow .sk-port__icon { color: var(--sk-success); }
-  .sk-port--event .sk-port__icon { color: var(--sk-warning); }
-  .sk-port--resource .sk-port__icon { color: #b184e8; }
+  .sk-port--flow .sk-port__socket { color: var(--sk-success); border-color: color-mix(in srgb, var(--sk-success) 55%, var(--sk-border)); }
+  .sk-port--event .sk-port__socket { color: var(--sk-warning); border-color: color-mix(in srgb, var(--sk-warning) 55%, var(--sk-border)); }
+  .sk-port--resource .sk-port__socket { color: #9a65d9; border-color: color-mix(in srgb, #9a65d9 55%, var(--sk-border)); }
   .sk-port > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sk-port > small { flex: 0 0 auto; color: var(--sk-text-tertiary); font: 9px var(--sk-font-mono); }
   .sk-port-group__more { min-height: 19px; padding: 2px 5px; display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 4px; color: var(--sk-text-tertiary); background: color-mix(in srgb, var(--sk-text-primary) 5%, transparent); font-size: 9px; text-align: left; }

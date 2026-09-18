@@ -497,10 +497,19 @@ interface CanvasPreviewProps {
 }
 
 function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewWorkspace, nodeLibraryOpen, onToggleNodeLibrary, onCloseNodeLibrary, runHistoryOpen, onToggleRunHistory, onCloseRunHistory, nodes, onAddNode, canRun, runState, onRun, onToggleRunPanel, runPanelOpen }: CanvasPreviewProps) {
+  const [connectionSource, setConnectionSource] = useState<{ nodeId: string; portId: string; kind: "data" | "flow" | "event" | "resource" } | null>(null);
   const addNode = (nodeName: string) => {
     onAddNode(nodeName);
     onCloseNodeLibrary();
   };
+  const connectPort = (nodeId: string, portId: string, direction: "input" | "output", kind: "data" | "flow" | "event" | "resource") => {
+    if (direction === "output") {
+      setConnectionSource((source) => source?.nodeId === nodeId && source.portId === portId ? null : { nodeId, portId, kind });
+      return;
+    }
+    if (connectionSource && connectionSource.nodeId !== nodeId && connectionSource.kind === kind) setConnectionSource(null);
+  };
+  const activePortKey = connectionSource ? `${connectionSource.nodeId}:${connectionSource.portId}` : null;
 
   return (
     <div className="canvas-preview">
@@ -516,10 +525,10 @@ function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled
         <path d="M263 158 C330 158 320 195 385 195" />
         <path d="M605 195 C670 195 650 250 718 250" />
       </svg>
-      {nodes[0] ? <CanvasNode className="node-one" title={nodes[0].name} typeLabel="Text input" icon={<Type />} primary={nodes[0].primary} state="success" outputs={[{ id: "text", label: "Topic", kind: "data", connectionCount: 3 }]} footer="128 chars" /> : null}
-      {nodes[1] ? <CanvasNode className="node-two" title={nodes[1].name} typeLabel="Agent task" icon={<Bot />} primary={nodes[1].primary} state="running" selected inputs={[{ id: "prompt", label: "Topic", kind: "data", connectionCount: 2 }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data", connectionCount: 4 }, { id: "outline", label: "Outline", kind: "data" }, { id: "sources", label: "Sources", kind: "resource" }, { id: "warnings", label: "Warnings", kind: "event" }, { id: "metrics", label: "Metrics", kind: "data" }, { id: "trace", label: "Execution trace", kind: "resource" }]} footer="Step 3 of 5" /> : null}
-      {nodes[2] ? <CanvasNode className="node-three" title={nodes[2].name} typeLabel="Human input" icon={<Pause />} primary={nodes[2].primary} state="waiting" inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" /> : null}
-      {nodes.slice(3).map((node, index) => <AddedCanvasNode key={node.id} name={node.name} index={index} />)}
+      {nodes[0] ? <CanvasNode nodeId={nodes[0].id} className="node-one" title={nodes[0].name} typeLabel="Text input" icon={<Type />} primary={nodes[0].primary} state="success" activePortKey={activePortKey} acceptingConnectionKind={connectionSource?.nodeId !== nodes[0].id ? connectionSource?.kind : null} onPortConnect={(portId, direction, kind) => connectPort(nodes[0].id, portId, direction, kind)} outputs={[{ id: "text", label: "Topic", kind: "data", connectionCount: 3 }]} footer="128 chars" /> : null}
+      {nodes[1] ? <CanvasNode nodeId={nodes[1].id} className="node-two" title={nodes[1].name} typeLabel="Agent task" icon={<Bot />} primary={nodes[1].primary} state="running" selected activePortKey={activePortKey} acceptingConnectionKind={connectionSource?.nodeId !== nodes[1].id ? connectionSource?.kind : null} onPortConnect={(portId, direction, kind) => connectPort(nodes[1].id, portId, direction, kind)} inputs={[{ id: "prompt", label: "Topic", kind: "data", connectionCount: 2 }, { id: "start", label: "Start", kind: "flow" }]} outputs={[{ id: "draft", label: "Draft", kind: "data", connectionCount: 4 }, { id: "outline", label: "Outline", kind: "data" }, { id: "sources", label: "Sources", kind: "resource" }, { id: "warnings", label: "Warnings", kind: "event" }, { id: "metrics", label: "Metrics", kind: "data" }, { id: "trace", label: "Execution trace", kind: "resource" }]} footer="Step 3 of 5" /> : null}
+      {nodes[2] ? <CanvasNode nodeId={nodes[2].id} className="node-three" title={nodes[2].name} typeLabel="Human input" icon={<Pause />} primary={nodes[2].primary} state="waiting" activePortKey={activePortKey} acceptingConnectionKind={connectionSource?.nodeId !== nodes[2].id ? connectionSource?.kind : null} onPortConnect={(portId, direction, kind) => connectPort(nodes[2].id, portId, direction, kind)} inputs={[{ id: "draft", label: "Draft", kind: "data" }]} outputs={[{ id: "approved", label: "Approve", kind: "event" }]} footer="Action required" /> : null}
+      {nodes.slice(3).map((node, index) => <AddedCanvasNode key={node.id} node={node} index={index} activePortKey={activePortKey} acceptingConnectionKind={connectionSource?.nodeId !== node.id ? connectionSource?.kind : null} onPortConnect={(portId, direction, kind) => connectPort(node.id, portId, direction, kind)} />)}
       {nodeLibraryOpen ? <NodeLibrary onAdd={addNode} onClose={onCloseNodeLibrary} /> : null}
       {runHistoryOpen ? <RunHistoryPanel onClose={onCloseRunHistory} /> : null}
       <AgentComposer
@@ -537,18 +546,18 @@ function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled
   );
 }
 
-function AddedCanvasNode({ name, index }: { name: string; index: number }) {
-  const node = name === "Text Input"
+function AddedCanvasNode({ node: nodeSummary, index, activePortKey, acceptingConnectionKind, onPortConnect }: { node: NodeSummary; index: number; activePortKey: string | null; acceptingConnectionKind: "data" | "flow" | "event" | "resource" | null | undefined; onPortConnect: (portId: string, direction: "input" | "output", kind: "data" | "flow" | "event" | "resource") => void }) {
+  const node = nodeSummary.name === "Text Input"
     ? { typeLabel: "Text input", icon: <Type />, inputs: [], outputs: [{ id: "text", label: "Text", kind: "data" as const }] }
-    : name === "File Input"
+    : nodeSummary.name === "File Input"
       ? { typeLabel: "File input", icon: <FolderOpen />, inputs: [], outputs: [{ id: "file", label: "File", kind: "resource" as const }] }
-      : name === "Human Approval"
+      : nodeSummary.name === "Human Approval"
         ? { typeLabel: "Human input", icon: <Pause />, inputs: [{ id: "request", label: "Request", kind: "data" as const }], outputs: [{ id: "approved", label: "Approved", kind: "event" as const }] }
-        : name === "Event Trigger"
+        : nodeSummary.name === "Event Trigger"
           ? { typeLabel: "Trigger", icon: <Zap />, inputs: [], outputs: [{ id: "event", label: "Event", kind: "event" as const }] }
           : { typeLabel: "Agent task", icon: <Bot />, inputs: [{ id: "goal", label: "Goal", kind: "data" as const }], outputs: [{ id: "result", label: "Result", kind: "data" as const }] };
   const position = { left: `${19 + (index % 3) * 22}%`, top: `${58 + Math.floor(index / 3) * 14}%` };
-  return <CanvasNode className="node-added" style={position} title={name} typeLabel={node.typeLabel} icon={node.icon} inputs={node.inputs} outputs={node.outputs} footer="Not configured" />;
+  return <CanvasNode nodeId={nodeSummary.id} className="node-added" style={position} title={nodeSummary.name} typeLabel={node.typeLabel} icon={node.icon} activePortKey={activePortKey} acceptingConnectionKind={acceptingConnectionKind} onPortConnect={onPortConnect} inputs={node.inputs} outputs={node.outputs} footer="Not configured" />;
 }
 
 function NodeLibrary({ onAdd, onClose }: { onAdd: (nodeName: string) => void; onClose: () => void }) {
