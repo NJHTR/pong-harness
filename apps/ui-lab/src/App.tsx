@@ -382,42 +382,44 @@ function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvas
   const currentWorkspaceState = aggregateCanvasState(currentCanvases.map((name) => canvasStates[name] ?? "idle"));
 
   return (
-    <>
+    <div className="sidebar-shell">
       <nav className="sidebar-global" aria-label="Global actions">
         <SidebarItem icon={<FolderPlus />} onClick={onNewWorkspace}>New Workspace</SidebarItem>
         <SidebarItem icon={<CalendarClock />}>Automations</SidebarItem>
         <SidebarItem icon={<Box />}>Extensions</SidebarItem>
       </nav>
-      <SidebarDisclosure label="Workspaces" open={workspacesOpen} onToggle={onToggleWorkspaces}>
-        <WorkspaceRow
-          name={workspaceName}
-          open={currentWorkspaceOpen}
-          onToggle={() => setCurrentWorkspaceOpen(!currentWorkspaceOpen)}
-          onAddCanvas={onAddCanvas}
-          onRename={() => onRename("workspace", workspaceName)}
-          onDelete={() => onDelete({ kind: "workspace", name: workspaceName })}
-          state={currentWorkspaceState}
-          current
-        >
-          {currentCanvases.map((name, index) => <CanvasRow key={`${name}-${index}`} name={name} state={canvasStates[name] ?? "idle"} active={name === canvasName} open={name === canvasName && currentCanvasOpen} onSelect={() => onSelectCanvas(name)} onToggle={() => { if (name !== canvasName) onSelectCanvas(name); setCurrentCanvasOpen(name === canvasName ? !currentCanvasOpen : true); }} onRename={() => onRename("canvas", name)} onDelete={() => onDelete({ kind: "canvas", name })} nodes={name === canvasName ? nodes : []} onNodeRename={(node) => onRename("node", node.name, node.id)} onNodeDelete={(node) => onDelete({ kind: "node", name: node.name, id: node.id })} onSetPrimary={onSetPrimary} />)}
-          <button type="button" className="workspace-add-canvas" onClick={onAddCanvas}><Plus /><span>New Canvas</span></button>
-          <div className="workspace-tools" aria-label={`${workspaceName} tools`}>
-            <SidebarItem className="is-nested" icon={<Folder />}>Files</SidebarItem>
-            <SidebarItem className="is-nested" icon={<Settings />}>Environments</SidebarItem>
-            <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
-          </div>
-        </WorkspaceRow>
-        {otherWorkspaces.map((name) => <WorkspaceRow key={name} name={name} state={name === "OpenMAIC" ? canvasStates["Java Course"] : aggregateCanvasState([canvasStates["Literature Survey"], canvasStates["Evaluation Plan"]])} open={Boolean(otherWorkspaceOpen[name])} onToggle={() => setOtherWorkspaceOpen((open) => ({ ...open, [name]: !open[name] }))} onRename={() => onRename("workspace", name)} onDelete={() => onDelete({ kind: "workspace", name })}>
-          <SidebarItem className="is-nested" icon={<PanelsTopLeft />} trailing={<CanvasRuntimeIcon state={name === "OpenMAIC" ? canvasStates["Java Course"] : canvasStates["Literature Survey"]} />}>{name === "OpenMAIC" ? "Java Course" : "Literature Survey"}</SidebarItem>
-          {name === "Research Workspace" ? <SidebarItem className="is-nested" icon={<PanelsTopLeft />} trailing={<CanvasRuntimeIcon state={canvasStates["Evaluation Plan"]} />}>Evaluation Plan</SidebarItem> : null}
-        </WorkspaceRow>)}
-      </SidebarDisclosure>
-      <SidebarDisclosure label="Recent" open={recentOpen} onToggle={onToggleRecent}>
-        <SidebarItem icon={<History />}>Evaluation Plan</SidebarItem>
-        <SidebarItem icon={<History />}>Citation Review</SidebarItem>
-      </SidebarDisclosure>
+      <div className="sidebar-scroll">
+        <SidebarDisclosure label="Workspaces" open={workspacesOpen} onToggle={onToggleWorkspaces}>
+          <WorkspaceRow
+            name={workspaceName}
+            open={currentWorkspaceOpen}
+            onToggle={() => setCurrentWorkspaceOpen(!currentWorkspaceOpen)}
+            onAddCanvas={onAddCanvas}
+            onRename={() => onRename("workspace", workspaceName)}
+            onDelete={() => onDelete({ kind: "workspace", name: workspaceName })}
+            state={currentWorkspaceState}
+            current
+          >
+            {currentCanvases.map((name, index) => <CanvasRow key={`${name}-${index}`} name={name} state={canvasStates[name] ?? "idle"} active={name === canvasName} open={name === canvasName && currentCanvasOpen} onSelect={() => onSelectCanvas(name)} onToggle={() => { if (name !== canvasName) onSelectCanvas(name); setCurrentCanvasOpen(name === canvasName ? !currentCanvasOpen : true); }} onRename={() => onRename("canvas", name)} onDelete={() => onDelete({ kind: "canvas", name })} nodes={name === canvasName ? nodes : []} onNodeRename={(node) => onRename("node", node.name, node.id)} onNodeDelete={(node) => onDelete({ kind: "node", name: node.name, id: node.id })} onSetPrimary={onSetPrimary} />)}
+            <button type="button" className="workspace-add-canvas" onClick={onAddCanvas}><Plus /><span>New Canvas</span></button>
+            <div className="workspace-tools" aria-label={`${workspaceName} tools`}>
+              <SidebarItem className="is-nested" icon={<Folder />}>Files</SidebarItem>
+              <SidebarItem className="is-nested" icon={<Settings />}>Environments</SidebarItem>
+              <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
+            </div>
+          </WorkspaceRow>
+          {otherWorkspaces.map((name) => <WorkspaceRow key={name} name={name} state={name === "OpenMAIC" ? canvasStates["Java Course"] : aggregateCanvasState([canvasStates["Literature Survey"], canvasStates["Evaluation Plan"]])} open={Boolean(otherWorkspaceOpen[name])} onToggle={() => setOtherWorkspaceOpen((open) => ({ ...open, [name]: !open[name] }))} onRename={() => onRename("workspace", name)} onDelete={() => onDelete({ kind: "workspace", name })}>
+            <SidebarItem className="is-nested" icon={<PanelsTopLeft />} trailing={<CanvasRuntimeIcon state={name === "OpenMAIC" ? canvasStates["Java Course"] : canvasStates["Literature Survey"]} />}>{name === "OpenMAIC" ? "Java Course" : "Literature Survey"}</SidebarItem>
+            {name === "Research Workspace" ? <SidebarItem className="is-nested" icon={<PanelsTopLeft />} trailing={<CanvasRuntimeIcon state={canvasStates["Evaluation Plan"]} />}>Evaluation Plan</SidebarItem> : null}
+          </WorkspaceRow>)}
+        </SidebarDisclosure>
+        <SidebarDisclosure label="Recent" open={recentOpen} onToggle={onToggleRecent}>
+          <SidebarItem icon={<History />}>Evaluation Plan</SidebarItem>
+          <SidebarItem icon={<History />}>Citation Review</SidebarItem>
+        </SidebarDisclosure>
+      </div>
       <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
-    </>
+    </div>
   );
 }
 
@@ -505,10 +507,10 @@ function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled
       <div className="canvas-tabbar"><div className="canvas-tab is-active"><PanelsTopLeft /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
       <div className="canvas-breadcrumb"><span>{workspaceName}</span><ChevronRight /><strong>{canvasTitle}</strong></div>
       <div className="canvas-actions" aria-label="Canvas actions">
-        <Tooltip content="Add node"><IconButton label="Add node" active={nodeLibraryOpen} onClick={onToggleNodeLibrary}><Blocks /></IconButton></Tooltip>
+        <Tooltip content="Add node" side="top"><IconButton label="Add node" active={nodeLibraryOpen} onClick={onToggleNodeLibrary}><Blocks /></IconButton></Tooltip>
         {canRun ? <Button variant="primary" size="small" leadingIcon={<Play />} onClick={onRun} disabled={runState === "running"}>{runState === "running" ? "Running" : "Run"}</Button> : null}
-        <Tooltip content="Run history"><IconButton label="Run history" active={runHistoryOpen} onClick={onToggleRunHistory}><History /></IconButton></Tooltip>
-        <Tooltip content="Toggle run output"><IconButton label="Toggle run output" active={runPanelOpen} onClick={onToggleRunPanel}><PanelBottom /></IconButton></Tooltip>
+        <Tooltip content="Run history" side="top"><IconButton label="Run history" active={runHistoryOpen} onClick={onToggleRunHistory}><History /></IconButton></Tooltip>
+        <Tooltip content="Toggle run output" side="top"><IconButton label="Toggle run output" active={runPanelOpen} onClick={onToggleRunPanel}><PanelBottom /></IconButton></Tooltip>
       </div>
       <svg className="canvas-edges" aria-hidden="true" viewBox="0 0 900 480" preserveAspectRatio="none">
         <path d="M263 158 C330 158 320 195 385 195" />
