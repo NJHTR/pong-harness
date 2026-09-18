@@ -37,12 +37,19 @@ export function CanvasNode({ title, typeLabel, icon, state = "idle", selected = 
     <article className={`sk-node is-${state} ${selected ? "is-selected" : ""} ${primary ? "is-primary" : ""} ${className}`} {...props}>
       <header className="sk-node__header">
         <span className="sk-node__icon">{icon}</span>
-        <span className="sk-node__heading"><strong>{title}</strong><small>{primary ? <><CirclePlay />Canvas entry</> : typeLabel}</small></span>
+        <span className="sk-node__heading">
+          <strong title={title}>{title}</strong>
+          <span className="sk-node__meta">{primary ? <><CirclePlay className="sk-node__entry-icon" />Canvas entry</> : typeLabel}</span>
+        </span>
         <IconButton label="Node actions" size="small"><MoreHorizontal /></IconButton>
       </header>
-      <div className="sk-node__ports">
-        <PortGroup direction="input" ports={inputs} />
-        <PortGroup direction="output" ports={outputs} />
+      <div className="sk-node__body">
+        <div className="sk-node__lane sk-node__lane--input" aria-label="Inputs">
+          <PortGroup direction="input" ports={inputs} />
+        </div>
+        <div className="sk-node__lane sk-node__lane--output" aria-label="Outputs">
+          <PortGroup direction="output" ports={outputs} />
+        </div>
       </div>
       <footer className="sk-node__footer"><StatusBadge tone={tone} dot>{stateLabels[state]}</StatusBadge>{footer ? <span>{footer}</span> : null}</footer>
     </article>

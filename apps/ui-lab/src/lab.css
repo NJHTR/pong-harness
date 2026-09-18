@@ -305,7 +305,7 @@ button, input, textarea { font-family: inherit; }
   .lab-window { height: calc(100vh - 68px); }
   .gallery-window { width: 60%; height: 80%; margin: 0; }
   .node-two { left: 50%; }
-  .node-three { display: none; }
+  .node-three { left: 4%; right: auto; top: 58%; display: block; }
 }
 
 @media (max-width: 520px) {
