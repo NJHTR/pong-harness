@@ -62,6 +62,7 @@ import {
   Tooltip,
   WindowFrame,
 } from "@seekwd/ui";
+import { mockApi, useWorkbenchSnapshot } from "./mock/store";
 
 type Theme = "dark" | "light";
 type LabView = "workbench" | "components";
@@ -103,6 +104,7 @@ export function App() {
 }
 
 function WorkbenchPreview() {
+  const mockSnapshot = useWorkbenchSnapshot();
   const [bottomOpen, setBottomOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [workspaceName, setWorkspaceName] = useState("Thesis Workspace");
@@ -136,6 +138,27 @@ function WorkbenchPreview() {
   });
   const [activeRunCanvas, setActiveRunCanvas] = useState<string | null>(null);
   const [completedCanvas, setCompletedCanvas] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!mockSnapshot.workspaces.length) return;
+    const activeWorkspace = mockSnapshot.workspaces.find((workspace) => workspace.name === workspaceName) ?? mockSnapshot.workspaces[0];
+    if (!activeWorkspace) return;
+    setWorkspaceNames(mockSnapshot.workspaces.map((workspace) => workspace.name));
+    if (activeWorkspace.name !== workspaceName) setWorkspaceName(activeWorkspace.name);
+    mockApi.listCanvases(activeWorkspace.id).then((canvases) => {
+      if (!canvases.length) return;
+      setCanvasNames(canvases.map((canvas) => canvas.name));
+      setCanvasStates(Object.fromEntries(canvases.map((canvas) => [canvas.name, canvas.status])) as Record<string, CanvasRuntimeState>);
+      if (!canvases.some((canvas) => canvas.name === canvasName)) setCanvasName(canvases[0].name);
+    });
+  }, [mockSnapshot.workspaces]);
+
+  useEffect(() => mockApi.subscribe((event) => {
+    if (event.type === "canvas.updated") {
+      setCanvasStates((states) => ({ ...states, [event.canvas.name]: event.canvas.status as CanvasRuntimeState }));
+      if (event.canvas.status === "success" && event.canvas.latestRunId) setCompletedCanvas(event.canvas.name);
+    }
+  }), []);
 
   useEffect(() => {
     if (!activeRunCanvas) return;
@@ -236,9 +259,15 @@ function WorkbenchPreview() {
   const setPrimaryNode = (nodeId: string) => setNodes((items) => items.map((node) => ({ ...node, primary: node.id === nodeId })));
   const runCanvas = () => {
     if (!nodes.some((node) => node.primary)) return;
-    setCanvasStates((states) => ({ ...states, [canvasName]: "running" }));
-    setActiveRunCanvas(canvasName);
-    setCompletedCanvas(null);
+    const workspace = mockSnapshot.workspaces.find((item) => item.name === workspaceName);
+    if (!workspace) return;
+    mockApi.listCanvases(workspace.id).then((canvases) => {
+      const canvas = canvases.find((item) => item.name === canvasName);
+      if (!canvas) return;
+      setCanvasStates((states) => ({ ...states, [canvas.name]: "running" }));
+      setActiveRunCanvas(canvas.name);
+      mockApi.startRun(canvas.id).catch(() => setCanvasStates((states) => ({ ...states, [canvas.name]: "error" })));
+    });
     setBottomOpen(true);
   };
 
