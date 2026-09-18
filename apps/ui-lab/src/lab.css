@@ -212,7 +212,23 @@ button, input, textarea { font-family: inherit; }
 .agent-composer__new-workspace { width: 100%; margin-top: 5px; }
 .agent-composer__surface { min-height: 84px; padding: 9px 9px 7px; display: grid; grid-template-rows: minmax(32px, 1fr) 27px; border: .5px solid var(--sk-border); border-radius: 18px; background: color-mix(in srgb, var(--sk-bg-elevated) 86%, transparent); box-shadow: 0 8px 30px rgba(0,0,0,.12), inset 0 .5px 0 rgba(255,255,255,.35); backdrop-filter: blur(30px) saturate(150%); }
 .agent-composer__scope-row + .agent-composer__surface { border-radius: 0 0 18px 18px; }
-.agent-composer textarea { width: 100%; min-height: 32px; max-height: 90px; padding: 1px 4px; resize: none; border: 0; outline: 0; color: var(--sk-text-primary); background: transparent; font-size: 11px; line-height: 1.45; }
+.agent-composer textarea {
+  width: 100%;
+  min-height: 32px;
+  max-height: 90px;
+  padding: 1px 4px;
+  resize: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 0;
+  outline: 0;
+  color: var(--sk-text-primary);
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.agent-composer textarea::-webkit-scrollbar { width: 0; height: 0; }
 .agent-composer textarea::placeholder { color: var(--sk-text-tertiary); }
 .agent-composer__surface footer { display: flex; align-items: center; gap: 5px; }
 .agent-composer__surface .sk-icon-button { border: 0; box-shadow: none; background: transparent; }
