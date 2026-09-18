@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUp,
   Bot,
@@ -584,10 +584,35 @@ interface AgentComposerProps {
 
 function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onNewWorkspace, onSubmit }: AgentComposerProps) {
   const [value, setValue] = useState("");
+  const [composerMaxHeight, setComposerMaxHeight] = useState(() => getComposerMaxHeight());
+  const [textareaHeight, setTextareaHeight] = useState(32);
+  const [textareaOverflow, setTextareaOverflow] = useState<"hidden" | "auto">("hidden");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
   const [query, setQuery] = useState("");
   const workspaces = ["Thesis Workspace", "Research Workspace", "OpenMAIC"];
   const visibleWorkspaces = workspaces.filter((workspace) => workspace.toLowerCase().includes(query.toLowerCase()));
+
+  useEffect(() => {
+    const updateMaxHeight = () => setComposerMaxHeight(getComposerMaxHeight());
+    window.addEventListener("resize", updateMaxHeight);
+    window.visualViewport?.addEventListener("resize", updateMaxHeight);
+    return () => {
+      window.removeEventListener("resize", updateMaxHeight);
+      window.visualViewport?.removeEventListener("resize", updateMaxHeight);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    const contentHeight = textarea.scrollHeight;
+    const nextHeight = Math.min(composerMaxHeight, Math.max(32, contentHeight));
+    textarea.style.height = `${nextHeight}px`;
+    setTextareaHeight(nextHeight);
+    setTextareaOverflow(contentHeight > composerMaxHeight ? "auto" : "hidden");
+  }, [value, composerMaxHeight]);
 
   const submit = () => {
     if (!value.trim()) return;
@@ -628,9 +653,11 @@ function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChan
       ) : null}
       <div className="agent-composer__surface">
         <textarea
+          ref={textareaRef}
           aria-label="Message the agent"
           placeholder={draftMode ? "Describe what to build" : "Request a change or ask about this canvas"}
           value={value}
+          style={{ height: `${textareaHeight}px`, maxHeight: `${composerMaxHeight}px`, overflowY: textareaOverflow }}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -647,6 +674,12 @@ function AgentComposer({ workspaceName, draftMode, scopeEnabled, onWorkspaceChan
       </div>
     </section>
   );
+}
+
+function getComposerMaxHeight() {
+  if (typeof window === "undefined") return 240;
+  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  return Math.max(96, Math.min(320, Math.floor(viewportHeight * 0.42)));
 }
 
 function RunHistoryPanel({ onClose }: { onClose: () => void }) {

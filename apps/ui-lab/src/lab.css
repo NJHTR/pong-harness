@@ -210,12 +210,12 @@ button, input, textarea { font-family: inherit; }
 .agent-composer__scope-list button.is-selected { background: var(--sk-bg-selected); }
 .agent-composer__scope-list svg, .agent-composer__new-workspace svg { width: 14px; height: 14px; color: var(--sk-text-secondary); }
 .agent-composer__new-workspace { width: 100%; margin-top: 5px; }
-.agent-composer__surface { min-height: 84px; padding: 9px 9px 7px; display: grid; grid-template-rows: minmax(32px, 1fr) 27px; border: .5px solid var(--sk-border); border-radius: 18px; background: color-mix(in srgb, var(--sk-bg-elevated) 86%, transparent); box-shadow: 0 8px 30px rgba(0,0,0,.12), inset 0 .5px 0 rgba(255,255,255,.35); backdrop-filter: blur(30px) saturate(150%); }
+.agent-composer__surface { min-height: 84px; padding: 9px 9px 7px; display: grid; grid-template-rows: auto 27px; border: .5px solid var(--sk-border); border-radius: 18px; background: color-mix(in srgb, var(--sk-bg-elevated) 86%, transparent); box-shadow: 0 8px 30px rgba(0,0,0,.12), inset 0 .5px 0 rgba(255,255,255,.35); backdrop-filter: blur(30px) saturate(150%); }
 .agent-composer__scope-row + .agent-composer__surface { border-radius: 0 0 18px 18px; }
 .agent-composer textarea {
   width: 100%;
   min-height: 32px;
-  max-height: 90px;
+  max-height: none;
   padding: 1px 4px;
   resize: none;
   overflow-y: auto;
