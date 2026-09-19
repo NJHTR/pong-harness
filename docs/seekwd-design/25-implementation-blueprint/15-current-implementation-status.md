@@ -16,7 +16,7 @@
 - `graph-schema`、`protocol-schema`、`node-sdk` TypeScript 共享类型包。
 - React + Vite Workbench：节点选择、添加、删除、配置、连接和图校验；浏览器预览明确标识为内存草稿。
 - Tauri 2 Workbench：保存版本与创建 Run 调用本地 SQLite Host；无安装包的 Windows 桌面构建已验证。
-- 保存的 CanvasVersion 可编译为依赖计划并创建 Run 快照与 `run.created` 事件；未保存版本不能启动 Run。
+- 保存的旧称 `CanvasVersion`（迁移目标为 CanvasRevision/CanvasRelease）可编译为依赖计划并创建 Run 快照与 `run.created` 事件；未保存不可变版本不能启动 Run。
 - 标准 `human-input` 节点会创建持久化 `waiting_input` NodeRun；Tauri Workbench 提供结构化输入弹层，提交后写入节点结果和审计事件。
 
 ## 骨架
@@ -33,3 +33,7 @@
 3. 为 Workbench 增加运行面板、输入等待、Artifact/证据查看，以及事件流投影。
 4. 增加本地 Worker 与受控执行上下文，再接入外部扩展和 Agent。
 5. 扩展 Tauri 2 发行配置，接入用户授权、环境管理、升级与安装包验收。
+
+开放前的实现状态还必须对照 `../28-design-review/00-review-report.md` 的验收场景和
+`../27-normative-contracts/11-command-event-recovery.md` 的恢复合同更新；类型骨架、Mock
+事件或 UI 投影不得单独标记为已实现。

@@ -44,7 +44,7 @@
 
 ### III-1 Graph Compiler
 
-责任：将 Plan 编译为 CanvasVersion、节点、端口和边。
+责任：将 Plan 编译为 CanvasDraft、节点、端口和边，并通过保存与发布流程产生 CanvasRevision / CanvasRelease。
 
 验收：图通过端口、循环、终止、预算、权限和环境静态校验。
 
@@ -161,4 +161,3 @@ Goal + Context
 ```
 
 没有 GoalVersion、GraphVersion、Run、NodeRun、Artifact、Evidence、PermissionDecision 这七个核心实体，系统不能满足可追溯、可调试和可恢复要求。
-

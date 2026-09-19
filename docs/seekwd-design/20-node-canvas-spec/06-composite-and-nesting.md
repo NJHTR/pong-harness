@@ -2,7 +2,7 @@
 
 ## 复合节点的定义
 
-复合节点是一个 NodeDefinitionVersion，其实现由另一个 CanvasVersion 完成。它在外部表现为普通节点，在内部表现为一张完整画布。
+复合节点是一个 NodeDefinitionVersion，其实现由一个 CanvasRelease（开发时可引用明确的 CanvasRevision）完成。它在外部表现为普通节点，在内部表现为一张完整画布。
 
 ```text
 Composite Node Interface
@@ -40,7 +40,7 @@ inlineable   调用方可把内部图展开进当前图
 
 ## Inline：内联复合节点
 
-内联将特定 Composite NodeInstance 的子图复制到父图，并把接口映射转换为边。内联产生新 CanvasVersion；不能修改原复合节点定义或其他调用方。
+内联将特定 Composite NodeInstance 的子图复制到父图，并把接口映射转换为边。内联产生新的 CanvasDraft，保存后形成新的 CanvasRevision；不能修改原复合节点定义或其他调用方。
 
 ## Expand：运行时细化
 
@@ -65,4 +65,3 @@ inlineable   调用方可把内部图展开进当前图
 ## 私有状态
 
 子图局部状态默认私有，只有公开输出、显式事件和已授权的观察摘要可以穿越边界。这样内部实现可以重构，同时保持父图的接口兼容。
-

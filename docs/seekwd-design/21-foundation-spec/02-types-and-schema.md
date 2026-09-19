@@ -62,9 +62,8 @@ integrity validation    校验和、签名或内容一致性
 
 ## 配置 Schema
 
-节点配置字段必须声明：是否必填、默认值、可编辑主体、敏感性、可热更新性、变更是否需要重新验证以及会影响哪些下游节点。秘密只能使用 SecretRef，不能把明文写入 CanvasVersion、日志或 GraphPatch。
+节点配置字段必须声明：是否必填、默认值、可编辑主体、敏感性、可热更新性、变更是否需要重新验证以及会影响哪些下游节点。秘密只能使用 SecretRef，不能把明文写入 CanvasDraft、CanvasRevision、CanvasRelease、日志或 GraphPatch。
 
 ## 动态类型
 
 动态值可以用于未知能力探索，但必须携带运行时 Schema、来源和验证器。动态类型不能穿过正式画布接口而不被收窄，否则接口无法静态检查。
-

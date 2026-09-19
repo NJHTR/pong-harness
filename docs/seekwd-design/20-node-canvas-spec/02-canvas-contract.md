@@ -1,5 +1,7 @@
 # 画布契约
 
+> 兼容说明：本文的入口和生命周期描述由 [27-normative-contracts/03-entrypoint-model.md](../27-normative-contracts/03-entrypoint-model.md) 与 [27-normative-contracts/02-identity-version-model.md](../27-normative-contracts/02-identity-version-model.md) 冻结。以下内容保留为概念解释，不得覆盖正式合同。
+
 ## 画布是什么
 
 画布是一个可调用的、可组合的图模块。它不是只供人拖拽的页面，也不是只能从头顺序运行的流程。画布应能独立定义输入、输出、事件、权限边界、环境需求、内部图和版本。
@@ -43,7 +45,7 @@ entrypoints          手动、调用、触发等入口定义
 completion contract  成功、失败、取消和部分完成的输出语义
 ```
 
-每个入口声明是否可重入、是否允许并发运行、是否需要特定权限或环境。外部调用方不得依赖内部节点 ID、节点位置或内部临时 Artifact。
+每个入口声明是否可重入、是否允许并发运行、是否需要特定权限或环境。外部调用方不得依赖内部节点 ID、节点位置或内部临时 Artifact。一个 Revision 必须有且只能有一个默认入口，同时可以有多个命名入口和触发绑定。
 
 ## 内部图
 
@@ -65,16 +67,13 @@ event retention
 
 节点级策略可以更严格，但不能放宽画布级或系统级策略。
 
-## 画布状态
+## 画布状态（旧模型）
 
 ```text
-draft       可编辑，不能作为稳定依赖运行
-validated   静态校验通过
-published   不可变，可被其他画布依赖
-deprecated  仍可读取，新的调用不建议使用
-archived    不再正常使用，历史运行保留
-deleted     逻辑删除，只有满足引用清理后才可物理删除
+CanvasDraft -> CanvasRevision -> CanvasRelease
 ```
+
+验证是 Revision 的验证报告，不是把可变 Draft 和不可变 Version 混在同一个 status 枚举中。具体规则见正式合同。
 
 ## 画布作为函数与画布作为空间
 
@@ -84,4 +83,3 @@ deleted     逻辑删除，只有满足引用清理后才可物理删除
 - **空间视角**：用户组织、理解、编辑、调试和比较图的可视化工作面。
 
 函数视角决定运行语义，空间视角服务人类理解；两者必须能互相映射，但不能混用。
-

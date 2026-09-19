@@ -1,5 +1,7 @@
 # 概念层次
 
+> 兼容说明：本章早期使用 `CanvasVersion` 表示不可变图的历史统称。它不是当前可序列化的协议类型，也不得出现在新的 SDK、IPC 或数据库合同中。实现必须使用 `CanvasDraft`、`CanvasRevision` 和 `CanvasRelease`；正式合同以 [../27-normative-contracts/02-identity-version-model.md](../27-normative-contracts/02-identity-version-model.md) 为准。
+
 ## 为什么必须分层
 
 一个“节点”可能同时被理解为节点类型、画布中的卡片和一次运行。将它们混在一起会导致：修改配置破坏历史、运行状态污染定义、复制节点出现 ID 冲突，以及无法安全复用。Pong Harness 必须严格区分以下层次。
@@ -16,12 +18,13 @@ Presentation Layer   节点在编辑器中的位置、折叠和展示偏好
 
 ```text
 CanvasIdentity       画布的稳定身份
-CanvasVersion        某一不可变的画布内容版本
 CanvasDraft          可编辑但尚未冻结的工作副本
-CanvasRun            一个 CanvasVersion 的一次执行
+CanvasRevision       一次保存产生的不可变图
+CanvasRelease        面向正式调用的不可变发布引用
+CanvasRun            一个 Revision/Release 快照的一次执行
 ```
 
-`CanvasIdentity` 不存放可变图内容。`CanvasVersion` 引用全部节点定义版本、配置、边、公开接口和策略。`CanvasRun` 不能被后续草稿或发布改写。
+`CanvasIdentity` 不存放可变图内容。`CanvasRevision` 和 `CanvasRelease` 引用全部节点定义版本、配置、边、公开接口和策略。`CanvasRun` 不能被后续草稿或发布改写。
 
 ## 节点层次
 
@@ -32,7 +35,7 @@ NodeInstance          某画布版本中的节点实例
 NodeRun               某次 CanvasRun 中该实例的一次执行
 ```
 
-一个 NodeDefinitionVersion 可以被很多画布复用；一个 NodeInstance 在一个 CanvasVersion 中只能出现一次；一个 NodeInstance 在重试、循环或多次调用中可以产生多个 NodeRun Attempt。
+一个 NodeDefinitionVersion 可以被很多画布复用；一个 NodeInstance 在一个 CanvasRevision 中只能出现一次；一个 NodeInstance 在重试、循环或多次调用中可以产生多个 NodeRun Attempt。
 
 ## 端口层次
 
@@ -54,7 +57,7 @@ PortValue             运行时某端口的一次已物化值或流引用
 
 ```text
 GoalVersion
-CanvasVersion
+CanvasRevision 或 CanvasRelease
 NodeDefinitionVersions
 resolved configuration
 selected capability bindings
@@ -64,4 +67,3 @@ input Artifact revisions
 ```
 
 任何后续编辑只会生成新版本或 RunPatch，绝不改变这个快照。
-

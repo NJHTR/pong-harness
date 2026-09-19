@@ -1,5 +1,7 @@
 # 状态机
 
+> 兼容说明：本文保留转移背景。唯一状态枚举、终态分类和 UI/调度语义以 [27-normative-contracts/04-unified-state-registry.md](../27-normative-contracts/04-unified-state-registry.md) 为准。
+
 ## 状态机规则
 
 每个生命周期对象都要定义：
@@ -66,4 +68,3 @@ draft / validated -> deleted
 ## 超时
 
 超时不是简单地把状态改为失败。系统要先发出取消请求，等待执行器确认；无法确认时进入 `cancel_pending` 或孤儿检测流程，并记录可能仍有外部副作用。
-

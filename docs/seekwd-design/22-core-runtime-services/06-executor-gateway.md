@@ -30,7 +30,7 @@ release(handle) -> ReleaseReceipt
 
 执行器不能：
 
-- 自行修改 CanvasVersion 或 GoalVersion。
+- 自行修改 CanvasDraft、CanvasRevision、CanvasRelease 或 GoalVersion。
 - 自行扩大文件、网络、进程或秘密范围。
 - 把自然语言输出当作 GraphPatch。
 - 在父 Run 取消后继续无关联运行。
@@ -42,4 +42,3 @@ release(handle) -> ReleaseReceipt
 ## 流式执行
 
 流必须有开始、数据块、警告、完成或失败事件；每块带序号和校验。网关负责背压、丢块检测、重连和取消，不能让生产者无限写入内存。
-

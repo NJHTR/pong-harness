@@ -48,7 +48,7 @@ verification    将标准和证据变成结论
 
 ## NodeInstance
 
-NodeInstance 由 CanvasVersion 拥有，包含：
+NodeInstance 由 CanvasDraft 编辑、由 CanvasRevision 固化，包含：
 
 ```text
 nodeInstanceId
@@ -70,7 +70,7 @@ actor preference
 
 ## 节点结果
 
-节点执行后只能以标准结果结束：
+节点执行后只能以标准结果结束。运行生命周期中的等待、取消中和恢复状态不属于结果枚举，统一见 [27-normative-contracts/04-unified-state-registry.md](../27-normative-contracts/04-unified-state-registry.md)：
 
 ```text
 success      输出满足节点局部契约
@@ -82,4 +82,3 @@ blocked      前置失败或策略阻断
 ```
 
 每种结果都必须产生结构化结果、状态原因和可追溯证据。
-

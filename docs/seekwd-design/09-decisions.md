@@ -26,8 +26,8 @@
 
 ## D-005：运行时图修改使用 GraphPatch
 
-- 状态：提案
-- 决策：Agent 修改图必须产生结构化补丁，经校验、权限判断和必要审批后应用。
+- 状态：已确认（正式合同见 [27-normative-contracts/05-graph-patch-protocol.md](27-normative-contracts/05-graph-patch-protocol.md)）
+- 决策：Agent 修改图必须产生结构化 `GraphPatch`，经校验、权限判断和必要审批后应用；运行中的未来计划调整必须使用独立 `RunPatch`。
 - 原因：防止静默改变运行图，支持审计、回滚和版本化。
 
 ## D-006：执行位置和环境分离
@@ -101,3 +101,51 @@
 - 状态：已确认
 - 决策：实施按领域值对象与 Schema、图校验、运行状态机、持久化与执行契约、Host IPC、Workbench、Agent/扩展的依赖方向推进。每层都必须有可执行测试和明确边界后，下一层才可依赖它。
 - 原因：画布 UI 或模型调用无法替代运行事实、版本、取消、恢复和权限的正确性；倒置实施顺序会把核心缺陷隐藏在演示界面中。
+
+## D-018：跨组件合同集中到 Normative Contract Layer
+
+- 状态：已确认
+- 决策：`27-normative-contracts` 是身份、版本、入口、状态、GraphPatch、跨画布投递、副作用、权限和保留策略的唯一正式合同源。其他目录可以保留概念、历史和实现说明，但冲突时必须引用并服从该目录。
+- 原因：提案、未实现和正式协议必须可区分，避免前端、Host、Agent 和扩展 SDK 读取不同语义。
+
+## D-019：Draft、Revision、Release 分层
+
+- 状态：已确认
+- 决策：CanvasDraft 是可变编辑对象；CanvasRevision 是不可变保存快照；CanvasRelease 是可调用的稳定发布对象。正式运行引用 Release，调试运行引用明确标记的 Revision；Draft 不得直接运行。
+- 原因：运行事实必须绑定不可变图，发布和编辑不能互相改写。
+
+## D-020：默认入口与命名入口并存
+
+- 状态：已确认
+- 决策：每个 CanvasRevision 必须且只能有一个 `defaultEntrypointId`，同时允许多个命名入口和触发器。`primaryNodeId` 仅作为迁移字段，不能代表全部入口。
+- 原因：手动运行需要稳定默认入口，而事件、定时、Webhook 和父画布调用需要独立入口。
+
+## D-021：统一状态注册表
+
+- 状态：已确认
+- 决策：Goal、Run、NodeRun、ExecutionHandle、ApprovalRequest、ApprovalGrant 和 ExecutionContext 的状态集合、终态、恢复、重试、人工处理和下游传播规则统一定义在 `27-normative-contracts/04-unified-state-registry.md`。
+- 原因：相同词汇在不同服务中不能产生不同调度和 UI 语义。
+
+## D-022：GraphPatch 与 RunPatch 分离
+
+- 状态：已确认
+- 决策：GraphPatch 只修改未来的 Draft/Revision 结构并产生审计版本；RunPatch 只调整尚未执行的运行计划，不得改写已发生事实或绕过图策略。两者必须使用不同命令、权限和审计类型。
+- 原因：Agent 修复不能通过修改历史图或运行记录制造成功。
+
+## D-023：跨画布采用至少一次投递和幂等去重
+
+- 状态：已确认
+- 决策：跨画布调用以 `invocationId`、`deliveryId` 和幂等键标识，至少一次投递；消费者按事件和调用去重，父子 Run 通过关联 ID 恢复。Call and Wait 与 Fire and Continue 的传播和失败策略由正式合同定义。
+- 原因：断线、重试和进程重启不可避免，恰好一次投递不能作为基础假设。
+
+## D-024：权限不是布尔值
+
+- 状态：已确认
+- 决策：代理权限必须由资源范围、能力、网络、秘密、预算、时限、后台执行和审批绕过边界组成的 AuthorityProfile 表达；任何扩大都触发重新评估或审批。
+- 原因：`fullAccess: true` 无法表达也无法审计真实风险。
+
+## D-025：LocalRestricted 是首个受限执行配置
+
+- 状态：已确认
+- 决策：开放执行前必须提供 LocalRestricted：只读工作区、默认禁网、禁止秘密和依赖安装、资源/进程/输出/时长限制、可取消，并明确结果未知处理。Docker、远程和不受限本地执行属于后续独立配置。
+- 原因：图语义成熟不等于任意代码和副作用执行安全。

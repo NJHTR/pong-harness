@@ -10,8 +10,8 @@ Graph Service 管理画布草稿、节点实例、边、公开接口、Presentat
 createCanvasDraft
 applyGraphPatch
 validateDraft
-publishCanvasVersion
-forkCanvasVersion
+publishCanvasRelease
+forkCanvasRevision
 compareVersions
 extractComposite
 inlineComposite
@@ -34,4 +34,3 @@ fix suggestions 结构化修复建议
 ## 运行时补丁
 
 RunPatch 不能修改已经执行成功且存在不可逆副作用的节点语义。它可以新增诊断、补偿、等待、替代分支或未执行节点；任何影响历史输出解释的改动必须创建新 Run Branch。
-

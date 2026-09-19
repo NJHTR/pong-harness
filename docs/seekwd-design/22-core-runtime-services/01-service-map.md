@@ -8,7 +8,7 @@
 | Goal Service | Goal、GoalVersion、约束、成功标准 | 节点调度 |
 | Context Service | Context Packet、来源、裁剪和新鲜度 | 持久化任意外部内容 |
 | Capability Service | CapabilityDescriptor、候选、绑定和信任 | 直接执行能力 |
-| Graph Service | CanvasDraft、CanvasVersion、GraphPatch | Run 状态 |
+| Graph Service | CanvasDraft、CanvasRevision、CanvasRelease、GraphPatch | Run 状态 |
 | Runtime Service | Run、NodeRun、队列、检查点、状态事件 | 改写图版本 |
 | Executor Gateway | 执行句柄、流、取消和 NodeResult | 授权放行 |
 | Artifact Service | Artifact、revision、血缘、存储引用 | 判定目标成功 |
@@ -40,4 +40,3 @@ Planner 是 Application Component：它可以请求 Goal、Context、Capability 
 ## 同进程实现
 
 首个版本可以把服务实现为同一进程内的模块，但要保持：独立接口、独立事务、显式事件和禁止跨模块私有状态访问。未来拆分进程时不应改变领域语义。
-

@@ -35,8 +35,8 @@ Compensation        目标失败时执行补偿路径
 ```text
 correlationId
 parentRunId
-sourceCanvasVersion
-targetCanvasVersion
+sourceCanvasRelease
+targetCanvasRelease
 inputMapping
 outputMapping
 timeout
@@ -52,4 +52,3 @@ idempotency key
 ## 循环控制
 
 系统必须检测跨画布的静态循环。需要循环的业务只能通过显式循环或事件反馈关系表达，并设置最大次数、截止时间和退出条件。
-

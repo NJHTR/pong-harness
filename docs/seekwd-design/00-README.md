@@ -4,11 +4,7 @@
 
 ## 文档规则
 
-设计结论使用三种状态：
-
-- **已确认**：用户已经明确表达，后续实现默认遵守。
-- **提案**：根据当前讨论形成的工程方案，后续可以调整。
-- **待确认**：存在明显取舍，需要继续讨论后再冻结。
+讨论记录和架构决策可以使用“已确认、提案、待确认”，但它们不自动成为跨组件协议。所有可作为 SDK / API 依据的内容必须使用下文正式合同状态，并登记到 `27-normative-contracts/01-contract-status-matrix.md`。
 
 每次讨论后：
 
@@ -16,6 +12,18 @@
 2. 在 `09-decisions.md` 记录关键决策和原因。
 3. 将未解决问题放入 `10-open-questions.md`。
 4. 涉及架构变化时更新本索引。
+
+## 正式合同优先级
+
+`27-normative-contracts/` 是跨组件协议的唯一规范入口。它将内容区分为：
+
+- **Normative Contract**：前端、Host、Runtime、Worker、Agent 和扩展必须遵守。
+- **Provisional Contract**：方向已确定，但字段或默认值仍可能调整，仅限内部验证。
+- **Experimental Proposal**：候选方案，不承诺兼容。
+- **Implementation Status**：当前代码事实，不定义目标协议。
+- **Informative**：背景和解释。
+
+发生冲突时必须以 `27-normative-contracts` 为准，并提交迁移说明；实现方不得根据旧文档自行选择解释。开始开发或开放前，先阅读 [27-normative-contracts/00-README.md](27-normative-contracts/00-README.md)。
 
 ## 文档索引
 
@@ -41,6 +49,8 @@
 | [24-reference-architecture](24-reference-architecture/00-README.md) | 本地优先的 Workbench、Host、Core 与扩展参考架构 |
 | [25-implementation-blueprint](25-implementation-blueprint/00-README.md) | 技术栈、仓库结构、实现顺序与验收标准 |
 | [26-ui-system](26-ui-system/00-README.md) | macOS 风格、设计令牌、组件边界与工作台交互基线 |
+| [27-normative-contracts](27-normative-contracts/00-README.md) | 正式合同状态、版本、入口、状态机、GraphPatch、恢复、权限与治理 |
+| [28-design-review](28-design-review/00-review-report.md) | 基础合同、实现缺口、UI 覆盖、交互闭环和开放边界审查报告 |
 
 ## 当前一句话定义
 

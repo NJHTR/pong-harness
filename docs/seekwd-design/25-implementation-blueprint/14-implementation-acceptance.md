@@ -2,7 +2,7 @@
 
 ## 可运行核心
 
-- Host 可创建并持久化 Goal、CanvasVersion、Run 和 NodeRun。
+- Host 可创建并持久化 Goal、CanvasDraft/CanvasRevision、Run 和 NodeRun。
 - 标准节点 Manifest 可注册、校验并在图中实例化。
 - Runtime 可正确推进数据、控制、等待和错误边。
 - Run 可暂停、恢复、取消，并在 Host 重启后对账。
@@ -29,4 +29,3 @@
 
 - 能够添加新的节点、扩展、执行器和画布包而不改动 Core 领域模型。
 - 能够升级 Host、Schema、节点和扩展，同时保留历史 Run 的可读性和可追溯性。
-

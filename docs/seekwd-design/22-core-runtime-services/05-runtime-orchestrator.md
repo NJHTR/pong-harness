@@ -5,7 +5,7 @@
 `startRun` 的最小步骤：
 
 ```text
-resolve exact GoalVersion and CanvasVersion
+resolve exact GoalVersion and CanvasRevision/CanvasRelease
 resolve NodeDefinitionVersions
 resolve capability bindings and execution contexts
 evaluate policy and obtain grants
@@ -41,4 +41,3 @@ persist state event before and after external side effect boundary
 ## 结束
 
 Run 结束前编排器要求 Verification Service 生成完整报告，并检查是否仍有活动或孤儿子运行。完成后写入 DeliveryManifest、终态事件和资源清理计划。
-

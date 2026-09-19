@@ -2,7 +2,7 @@
 
 ## 图编译结果
 
-运行前，Harness 将 CanvasVersion 编译为可调度计划：
+运行前，Harness 将 CanvasRelease（或显式调试用 CanvasRevision）编译为可调度计划：
 
 ```text
 normalized nodes
@@ -33,7 +33,7 @@ retry or resume checkpoint
 
 候选节点仍须通过权限、环境、预算、幂等和锁定检查。
 
-## 节点终态
+## 节点生命周期状态
 
 ```text
 queued
@@ -52,7 +52,7 @@ skipped
 blocked
 ```
 
-节点状态转换必须遵循定义的状态机；UI 不能自行制造状态。状态变化均产生事件和时间戳。
+节点状态转换必须遵循 [27-normative-contracts/04-unified-state-registry.md](../27-normative-contracts/04-unified-state-registry.md)；本节列表仅保留节点执行常见状态，不能作为另一套枚举。UI 不能自行制造状态。状态变化均产生事件和时间戳。
 
 ## 下游可达性
 
@@ -73,4 +73,3 @@ blocked
 ## 终止性
 
 每个 Run 必须最终到达成功、失败、取消、过期或明确等待状态。无限等待、无限循环、无上限重试和无人处理的孤儿子运行都属于编译或运行错误。
-

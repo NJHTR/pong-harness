@@ -1,5 +1,7 @@
 # Pong Harness 核心运行时服务规范
 
+> 兼容说明：本目录描述服务责任和实现方向，不替代正式协议。命令、状态、版本、补丁、恢复和权限语义以 [../27-normative-contracts/](../27-normative-contracts/00-README.md) 为准；服务实现不得从旧字段推导新的协议含义。
+
 本目录将前面的领域定义落实为协作服务。这里的“服务”是责任边界，不要求一开始部署为独立进程；早期可以在同一 Host 内实现，但接口和事实来源必须保持分离。
 
 ## 总体请求路径
@@ -36,4 +38,3 @@
 | [13-api-and-subscription-surface.md](13-api-and-subscription-surface.md) | UI、Host、扩展的 API 与订阅边界 |
 | [14-threat-model.md](14-threat-model.md) | 信任边界、攻击面和最低防护要求 |
 | [15-definition-of-done.md](15-definition-of-done.md) | 每个核心能力的完成定义 |
-

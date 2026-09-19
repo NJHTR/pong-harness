@@ -1,10 +1,13 @@
 # 版本、持久化与迁移
 
+> 兼容说明：本文的 `CanvasVersion` 是旧称。正式对象和运行引用规则以 [27-normative-contracts/02-identity-version-model.md](../27-normative-contracts/02-identity-version-model.md) 为准。
+
 ## 版本对象
 
 ```text
 CanvasDraft       可编辑工作副本
-CanvasVersion     不可变完整图
+CanvasRevision    不可变完整图
+CanvasRelease     稳定可调用发布
 NodeDefinitionVersion 不可变节点契约
 RunSnapshot       运行时解析快照
 RunPatch          只影响某次运行的临时图变更
@@ -12,7 +15,7 @@ RunPatch          只影响某次运行的临时图变更
 
 ## 发布条件
 
-CanvasVersion 发布前必须通过：
+CanvasRevision 发布为 CanvasRelease 前必须通过：
 
 - 输入输出接口校验。
 - 所有节点配置 Schema 校验。
@@ -37,7 +40,7 @@ floating    由策略解析最新满足版本
 
 ## 节点版本迁移
 
-节点定义升级需要提供配置迁移和端口迁移规则。迁移必须产生新 CanvasVersion；不能在原图中直接替换定义引用。
+节点定义升级需要提供配置迁移和端口迁移规则。迁移必须更新 CanvasDraft 并保存为新的 CanvasRevision；不能在原 Revision 或 Release 中直接替换定义引用。
 
 ## 持久化原子性
 
@@ -46,4 +49,3 @@ floating    由策略解析最新满足版本
 ## 删除和归档
 
 画布、节点版本和 Artifact 默认逻辑删除。只有没有活动运行、版本、技能、审计或外部调用引用时，才允许物理清理；清理前必须完成引用检查。
-

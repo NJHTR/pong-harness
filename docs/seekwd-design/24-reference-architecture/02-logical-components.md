@@ -18,7 +18,7 @@
 
 ## Graph Layer
 
-责任：CanvasDraft、CanvasVersion、GraphPatch、静态校验、复合节点和接口兼容性。不能更新运行状态。
+责任：CanvasDraft、CanvasRevision、CanvasRelease、GraphPatch、静态校验、复合节点和接口兼容性。旧实现中的 CanvasVersion 仅作为迁移别名；不能更新运行状态。
 
 ## Runtime Layer
 
@@ -43,4 +43,3 @@
 ## Projection Layer
 
 责任：搜索、列表、时间线、统计、通知和 UI 投影。投影可以重建，不能被其他组件当作事实来源。
-

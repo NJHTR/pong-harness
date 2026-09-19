@@ -39,9 +39,8 @@ GoalVersion
   -> GraphDraft proposal
   -> Graph static validation
   -> policy / human decision
-  -> CanvasVersion or RunPatch
+  -> CanvasDraft / GraphPatch or RunPatch
   -> Runtime start
 ```
 
 这保证用户可以在“目标理解”“计划”“图结构”“执行”四个层次分别介入。
-

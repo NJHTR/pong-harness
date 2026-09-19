@@ -5,7 +5,7 @@
 ```text
 identity_*          主体、设备、会话和租约
 goal_*              Goal、GoalVersion、Constraint、Criterion
-canvas_*            Canvas、CanvasDraft、CanvasVersion、Node、Edge
+canvas_*            CanvasIdentity、CanvasDraft、CanvasRevision、CanvasRelease、Node、Edge
 capability_*        Manifest、Version、Binding、Health
 run_*               Run、NodeRun、Attempt、Checkpoint、Wait
 event_*             追加式事件和游标
@@ -35,4 +35,3 @@ migration_*         迁移历史和校验
 ## 数据清理
 
 清理程序必须先查询引用、活动 Run、审计保留和用户锁定，再生成删除计划。删除计划本身进入审计，失败可以重试且不会误删其他 revision。
-

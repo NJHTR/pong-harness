@@ -50,7 +50,7 @@ restore version
 2. 若目标对象未被别人修改，可以自动合并。
 3. 若同一节点、端口、边或接口冲突，保留两个 Patch 并要求解决。
 4. 不允许用最后写入覆盖未提示的图语义冲突。
-5. 解决冲突后生成新的 Draft Version。
+5. 解决冲突后更新 CanvasDraft，保存时形成新的 CanvasRevision。
 
 ## 锁定和保护
 
@@ -75,5 +75,4 @@ restore version
 
 ## 草稿与运行
 
-编辑器中未发布的 Draft 只用于审阅、静态检查和测试运行。启动正式运行时必须选择一个明确的 CanvasVersion，不能让运行隐式读取用户正在编辑的草稿。
-
+编辑器中的 CanvasDraft 只用于编辑、审阅和静态检查。“运行草稿”必须先保存成不可变 CanvasRevision，再启动显式调试运行。正式运行必须选择一个 CanvasRelease，不能让运行隐式读取用户正在编辑的草稿。

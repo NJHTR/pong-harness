@@ -53,8 +53,10 @@ CapabilityNeed
 
 ```text
 Canvas
-  1 --- n CanvasVersion
-CanvasVersion
+  1 --- n CanvasDraft
+  1 --- n CanvasRevision
+  1 --- n CanvasRelease
+CanvasRevision
   1 --- n GraphNode
   1 --- n GraphEdge
   1 --- n GraphPolicy
@@ -67,7 +69,7 @@ GraphEdge
 
 ### GraphNode
 
-节点实例有稳定 ID，但配置随 CanvasVersion 固化。节点包含端口映射、显示元数据、启用状态、失败策略和可见性策略。内部节点可属于复合节点或 Agent 节点的私有子图。
+节点实例有稳定 ID，但配置随 CanvasRevision 固化。节点包含端口映射、显示元数据、启用状态、失败策略和可见性策略。内部节点可属于复合节点或 Agent 节点的私有子图。
 
 ### GraphEdge
 
@@ -75,7 +77,7 @@ GraphEdge
 
 ### GraphPatch
 
-由 Patch Header 和一组原子操作构成。原子操作必须定义前置版本、目标对象、变更前摘要、变更后摘要和可逆性。应用后产生新的 CanvasVersion 或 RunPatch。
+由 Patch Header 和一组原子操作构成。原子操作必须定义前置版本、目标对象、变更前摘要、变更后摘要和可逆性。GraphPatch 更新 CanvasDraft 并产生新的 CanvasRevision；RunPatch 只产生运行分支，不能修改 Release。
 
 ## 运行域
 
@@ -95,7 +97,7 @@ NodeRun
 
 ### Run
 
-运行固定引用 GoalVersion、CanvasVersion、策略版本和起始输入。父子 Run 使用 correlation 和 parent 关系，而非把所有数据复制到子运行。
+运行固定引用 GoalVersion、CanvasRelease（或显式调试 CanvasRevision）、策略版本和起始输入。父子 Run 使用 correlation 和 parent 关系，而非把所有数据复制到子运行。
 
 ### NodeRun
 
@@ -138,7 +140,7 @@ ApprovalRequest
 
 ```text
 by goal / goal version
-by canvas / canvas version
+by canvas / draft / revision / release
 by run / correlation / parent run
 by node run status
 by artifact lineage
@@ -146,4 +148,3 @@ by capability and trust level
 by permission decision and expiry
 by verification outcome
 ```
-
