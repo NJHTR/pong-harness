@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUp,
+  Bell,
   Bot,
   Box,
+  Braces,
   ChevronRight,
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -12,11 +14,18 @@ import {
   CircleAlert,
   CirclePlay,
   Clock3,
+  Cloud,
+  Code2,
+  Cpu,
+  Database,
+  ExternalLink,
+  FileCode2,
   Folder,
   FolderOpen,
   FolderPlus,
   GitFork,
   History,
+  KeyRound,
   LoaderCircle,
   Minus,
   Moon,
@@ -29,10 +38,13 @@ import {
   Play,
   Plus,
   Search,
+  ShieldCheck,
+  SlidersHorizontal,
   Settings,
   Pencil,
   Trash2,
   TriangleAlert,
+  UserRoundCog,
   Sun,
   Type,
   X,
@@ -66,10 +78,50 @@ import { mockApi, useWorkbenchSnapshot } from "./mock/store";
 
 type Theme = "dark" | "light";
 type LabView = "workbench" | "components";
+type WorkbenchSurface = "canvas" | "automations" | "extensions" | "settings" | "files" | "environments" | "agents";
 type ManagedKind = "workspace" | "canvas" | "node";
 interface ManagedTarget { kind: ManagedKind; id?: string; name: string }
 interface NodeSummary { id: string; name: string; primary?: boolean }
 type CanvasRuntimeState = "idle" | "running" | "waiting" | "success" | "error";
+
+interface AutomationRecord {
+  id: string;
+  name: string;
+  canvas: string;
+  schedule: string;
+  nextRun: string;
+  lastRun: string;
+  enabled: boolean;
+}
+
+interface ExtensionRecord {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  publisher: string;
+  enabled: boolean;
+  updateAvailable?: boolean;
+  installed: boolean;
+  icon: ReactNode;
+}
+
+interface AppNotice {
+  title: string;
+  message: string;
+  tone?: "success" | "info";
+}
+
+interface SettingsState {
+  compactSidebar: boolean;
+  reduceMotion: boolean;
+  notifySuccess: boolean;
+  notifyFailure: boolean;
+  confirmDestructive: boolean;
+  reopenLastWorkspace: boolean;
+  allowBackgroundRuns: boolean;
+  telemetry: boolean;
+}
 
 function aggregateCanvasState(states: CanvasRuntimeState[]): CanvasRuntimeState {
   return (["error", "waiting", "running", "success", "idle"] as const).find((state) => states.includes(state)) ?? "idle";
@@ -105,6 +157,7 @@ export function App() {
 
 function WorkbenchPreview() {
   const mockSnapshot = useWorkbenchSnapshot();
+  const [surface, setSurface] = useState<WorkbenchSurface>("canvas");
   const [bottomOpen, setBottomOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [workspaceName, setWorkspaceName] = useState("Thesis Workspace");
@@ -138,6 +191,26 @@ function WorkbenchPreview() {
   });
   const [activeRunCanvas, setActiveRunCanvas] = useState<string | null>(null);
   const [completedCanvas, setCompletedCanvas] = useState<string | null>(null);
+  const [appNotice, setAppNotice] = useState<AppNotice | null>(null);
+  const [automations, setAutomations] = useState<AutomationRecord[]>([
+    { id: "morning-review", name: "Morning literature review", canvas: "Citation Review", schedule: "Every weekday at 09:00", nextRun: "Mon, 09:00", lastRun: "Today, 09:01 · Succeeded", enabled: true },
+    { id: "weekly-report", name: "Weekly experiment digest", canvas: "Experiment Report", schedule: "Every Friday at 17:30", nextRun: "Fri, 17:30", lastRun: "Sep 12, 17:34 · Succeeded", enabled: true },
+    { id: "source-watch", name: "Source change monitor", canvas: "Source Analysis", schedule: "Every 6 hours", nextRun: "Paused", lastRun: "Yesterday, 18:00 · Failed", enabled: false },
+  ]);
+  const [automationDialogOpen, setAutomationDialogOpen] = useState(false);
+  const [editingAutomationId, setEditingAutomationId] = useState<string | null>(null);
+  const [automationName, setAutomationName] = useState("");
+  const [automationCanvas, setAutomationCanvas] = useState("Experiment Report");
+  const [automationSchedule, setAutomationSchedule] = useState("Every weekday at 09:00");
+  const [extensions, setExtensions] = useState<ExtensionRecord[]>([
+    { id: "github", name: "GitHub", description: "Read repositories, issues and pull requests from workspace flows.", version: "2.4.1", publisher: "Seekwd", enabled: true, installed: true, icon: <GitFork /> },
+    { id: "filesystem", name: "Workspace Files", description: "Structured file access constrained to the active workspace.", version: "1.8.0", publisher: "Seekwd", enabled: true, installed: true, icon: <FolderOpen /> },
+    { id: "postgres", name: "PostgreSQL", description: "Query approved databases through parameterized operations.", version: "1.2.3", publisher: "Seekwd Labs", enabled: false, installed: true, updateAvailable: true, icon: <Database /> },
+    { id: "browser", name: "Browser Control", description: "Drive browser sessions with explicit host and data boundaries.", version: "0.9.6", publisher: "Seekwd Labs", enabled: false, installed: false, icon: <Cloud /> },
+    { id: "python", name: "Python Runtime", description: "Run isolated Python tasks in restricted environments.", version: "1.0.0", publisher: "Community", enabled: false, installed: false, icon: <Code2 /> },
+  ]);
+  const [settingsSection, setSettingsSection] = useState("general");
+  const [settingsState, setSettingsState] = useState<SettingsState>({ compactSidebar: false, reduceMotion: false, notifySuccess: true, notifyFailure: true, confirmDestructive: true, reopenLastWorkspace: true, allowBackgroundRuns: false, telemetry: false });
 
   useEffect(() => {
     if (!mockSnapshot.workspaces.length) return;
@@ -198,7 +271,30 @@ function WorkbenchPreview() {
     setCanvasStates((states) => ({ ...states, [nextName]: "idle" }));
     setCanvasStarted(false);
     setComposerScopeEnabled(true);
+    setSurface("canvas");
   };
+
+  const navigate = (next: WorkbenchSurface) => {
+    setSurface(next);
+    if (next !== "canvas") { setBottomOpen(false); setNodeLibraryOpen(false); setRunHistoryOpen(false); }
+  };
+  const selectCanvas = (name: string) => { setCanvasName(name); setSurface("canvas"); };
+  const openAutomationDialog = (automation?: AutomationRecord) => {
+    setEditingAutomationId(automation?.id ?? null);
+    setAutomationName(automation?.name ?? "");
+    setAutomationCanvas(automation?.canvas ?? canvasNames[0] ?? "Experiment Report");
+    setAutomationSchedule(automation?.schedule ?? "Every weekday at 09:00");
+    setAutomationDialogOpen(true);
+  };
+  const saveAutomation = () => {
+    const name = automationName.trim();
+    if (!name) return;
+    if (editingAutomationId) setAutomations((items) => items.map((item) => item.id === editingAutomationId ? { ...item, name, canvas: automationCanvas, schedule: automationSchedule } : item));
+    else setAutomations((items) => [{ id: `automation-${Date.now()}`, name, canvas: automationCanvas, schedule: automationSchedule, nextRun: "Tomorrow, 09:00", lastRun: "Never", enabled: true }, ...items]);
+    setAutomationDialogOpen(false);
+    setAppNotice({ title: editingAutomationId ? "Automation updated" : "Automation created", message: `${name} is ready.` });
+  };
+  const updateSetting = (key: keyof typeof settingsState, value: boolean) => setSettingsState((state) => ({ ...state, [key]: value }));
 
   const startRename = (kind: ManagedKind, name: string, id?: string) => {
     setRenameTarget({ kind, name, id });
@@ -274,19 +370,19 @@ function WorkbenchPreview() {
   return (
     <>
       <WindowFrame
-        className={`lab-window ${inspectorOpen ? "" : "hide-inspector"}`}
-        title={workspaceName}
-        subtitle="Saved"
+        className={`lab-window ${surface === "canvas" && inspectorOpen ? "" : "hide-inspector"} ${settingsState.compactSidebar ? "compact-sidebar" : ""} ${settingsState.reduceMotion ? "reduce-motion" : ""}`}
+        title={surface === "canvas" ? workspaceName : surface[0].toUpperCase() + surface.slice(1)}
+        subtitle={surface === "canvas" ? "Saved" : workspaceName}
         toolbar={
           <Toolbar>
-            <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip>
+            {surface === "canvas" ? <Tooltip content="Toggle inspector"><IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight /></IconButton></Tooltip> : null}
           </Toolbar>
         }
-        sidebar={<WorkspaceNavigation workspaceName={workspaceName} workspaceNames={workspaceNames} canvasName={canvasName} canvasNames={canvasNames} nodes={nodes} canvasStates={canvasStates} workspacesOpen={workspacesOpen} recentOpen={recentOpen} onToggleWorkspaces={() => setWorkspacesOpen(!workspacesOpen)} onToggleRecent={() => setRecentOpen(!recentOpen)} onNewWorkspace={openNewWorkspace} onAddCanvas={createCanvas} onSelectCanvas={setCanvasName} onRename={startRename} onDelete={setDeleteTarget} onSetPrimary={setPrimaryNode} />}
-        inspector={inspectorOpen ? <NodeInspector nodeName={nodes[1]?.name ?? nodes[0]?.name ?? "No node selected"} /> : undefined}
-        bottomPanel={bottomOpen ? <RunPanel /> : undefined}
+        sidebar={<WorkspaceNavigation activeSurface={surface} onNavigate={navigate} workspaceName={workspaceName} workspaceNames={workspaceNames} canvasName={canvasName} canvasNames={canvasNames} nodes={nodes} canvasStates={canvasStates} workspacesOpen={workspacesOpen} recentOpen={recentOpen} onToggleWorkspaces={() => setWorkspacesOpen(!workspacesOpen)} onToggleRecent={() => setRecentOpen(!recentOpen)} onNewWorkspace={openNewWorkspace} onAddCanvas={createCanvas} onSelectCanvas={selectCanvas} onRename={startRename} onDelete={setDeleteTarget} onSetPrimary={setPrimaryNode} />}
+        inspector={surface === "canvas" && inspectorOpen ? <NodeInspector nodeName={nodes[1]?.name ?? nodes[0]?.name ?? "No node selected"} /> : undefined}
+        bottomPanel={surface === "canvas" && bottomOpen ? <RunPanel /> : undefined}
       >
-        <CanvasPreview
+        {surface === "canvas" ? <CanvasPreview
           workspaceName={workspaceName}
           canvasTitle={canvasName}
           canvasStarted={canvasStarted}
@@ -309,9 +405,30 @@ function WorkbenchPreview() {
           onRun={runCanvas}
           onToggleRunPanel={() => setBottomOpen(!bottomOpen)}
           runPanelOpen={bottomOpen}
-        />
+          onAddCanvas={createCanvas}
+        /> : null}
+        {surface === "automations" ? <AutomationsPage automations={automations} onCreate={() => openAutomationDialog()} onEdit={openAutomationDialog} onToggle={(id, enabled) => setAutomations((items) => items.map((item) => item.id === id ? { ...item, enabled, nextRun: enabled ? "Tomorrow, 09:00" : "Paused" } : item))} onRun={(automation) => setAppNotice({ title: "Automation started", message: `${automation.name} is running on ${automation.canvas}.`, tone: "info" })} onDelete={(id) => setAutomations((items) => items.filter((item) => item.id !== id))} /> : null}
+        {surface === "extensions" ? <ExtensionsPage extensions={extensions} onToggle={(id, enabled) => setExtensions((items) => items.map((item) => item.id === id ? { ...item, enabled } : item))} onInstall={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, installed: true, enabled: true } : item)); setAppNotice({ title: "Extension installed", message: "The extension is ready for this workspace." }); }} onUpdate={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, updateAvailable: false } : item)); setAppNotice({ title: "Extension updated", message: "The latest extension manifest is installed." }); }} onUninstall={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, installed: false, enabled: false } : item)); setAppNotice({ title: "Extension uninstalled", message: "The extension was removed from this workspace." }); }} onNotice={(message) => setAppNotice({ title: "Extension details", message, tone: "info" })} /> : null}
+        {surface === "settings" ? <SettingsPage section={settingsSection} onSectionChange={setSettingsSection} settings={settingsState} onChange={updateSetting} /> : null}
+        {surface === "files" ? <FilesPage workspaceName={workspaceName} onNotice={(message) => setAppNotice({ title: "Workspace files", message })} /> : null}
+        {surface === "environments" ? <EnvironmentsPage onNotice={(message) => setAppNotice({ title: "Environment updated", message })} /> : null}
+        {surface === "agents" ? <AgentsPage onNotice={(message) => setAppNotice({ title: "Agent updated", message })} /> : null}
       </WindowFrame>
       {completedCanvas ? <Notification title="Canvas completed" icon={<CheckCircle2 />} time="now" onDismiss={() => setCompletedCanvas(null)}>{completedCanvas} finished successfully. Review its output and artifacts.</Notification> : null}
+      {appNotice ? <Notification title={appNotice.title} icon={appNotice.tone === "info" ? <Bell /> : <CheckCircle2 />} time="now" onDismiss={() => setAppNotice(null)}>{appNotice.message}</Notification> : null}
+      <Dialog
+        open={automationDialogOpen}
+        title={editingAutomationId ? "Edit Automation" : "New Automation"}
+        description="Schedule a published canvas entrypoint. This preview stores the configuration in mock state."
+        onClose={() => setAutomationDialogOpen(false)}
+        footer={<><Button onClick={() => setAutomationDialogOpen(false)}>Cancel</Button><Button variant="primary" disabled={!automationName.trim()} onClick={saveAutomation}>{editingAutomationId ? "Save Changes" : "Create Automation"}</Button></>}
+      >
+        <div className="automation-form">
+          <TextField label="Name" autoFocus placeholder="Daily research brief" value={automationName} onChange={(event) => setAutomationName(event.target.value)} />
+          <label className="surface-select"><span>Canvas</span><select value={automationCanvas} onChange={(event) => setAutomationCanvas(event.target.value)}>{canvasNames.map((name) => <option key={name}>{name}</option>)}</select></label>
+          <label className="surface-select"><span>Schedule</span><select value={automationSchedule} onChange={(event) => setAutomationSchedule(event.target.value)}><option>Every weekday at 09:00</option><option>Every day at 18:00</option><option>Every 6 hours</option><option>Every Friday at 17:30</option></select></label>
+        </div>
+      </Dialog>
       <Dialog
         open={newWorkspaceOpen}
         title="New Workspace"
@@ -355,6 +472,8 @@ function WorkbenchPreview() {
 }
 
 interface WorkspaceNavigationProps {
+  activeSurface: WorkbenchSurface;
+  onNavigate: (surface: WorkbenchSurface) => void;
   workspaceName: string;
   workspaceNames: string[];
   canvasName: string;
@@ -373,7 +492,7 @@ interface WorkspaceNavigationProps {
   onSetPrimary: (nodeId: string) => void;
 }
 
-function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvasNames, nodes, canvasStates, workspacesOpen, recentOpen, onToggleWorkspaces, onToggleRecent, onNewWorkspace, onAddCanvas, onSelectCanvas, onRename, onDelete, onSetPrimary }: WorkspaceNavigationProps) {
+function WorkspaceNavigation({ activeSurface, onNavigate, workspaceName, workspaceNames, canvasName, canvasNames, nodes, canvasStates, workspacesOpen, recentOpen, onToggleWorkspaces, onToggleRecent, onNewWorkspace, onAddCanvas, onSelectCanvas, onRename, onDelete, onSetPrimary }: WorkspaceNavigationProps) {
   const [currentWorkspaceOpen, setCurrentWorkspaceOpen] = useState(true);
   const [currentCanvasOpen, setCurrentCanvasOpen] = useState(true);
   const [otherWorkspaceOpen, setOtherWorkspaceOpen] = useState<Record<string, boolean>>({});
@@ -385,8 +504,8 @@ function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvas
     <div className="sidebar-shell">
       <nav className="sidebar-global" aria-label="Global actions">
         <SidebarItem icon={<FolderPlus />} onClick={onNewWorkspace}>New Workspace</SidebarItem>
-        <SidebarItem icon={<CalendarClock />}>Automations</SidebarItem>
-        <SidebarItem icon={<Box />}>Extensions</SidebarItem>
+        <SidebarItem icon={<CalendarClock />} active={activeSurface === "automations"} onClick={() => onNavigate("automations")}>Automations</SidebarItem>
+        <SidebarItem icon={<Box />} active={activeSurface === "extensions"} onClick={() => onNavigate("extensions")}>Extensions</SidebarItem>
       </nav>
       <div className="sidebar-scroll">
         <SidebarDisclosure label="Workspaces" open={workspacesOpen} onToggle={onToggleWorkspaces}>
@@ -403,9 +522,9 @@ function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvas
             {currentCanvases.map((name, index) => <CanvasRow key={`${name}-${index}`} name={name} state={canvasStates[name] ?? "idle"} active={name === canvasName} open={name === canvasName && currentCanvasOpen} onSelect={() => onSelectCanvas(name)} onToggle={() => { if (name !== canvasName) onSelectCanvas(name); setCurrentCanvasOpen(name === canvasName ? !currentCanvasOpen : true); }} onRename={() => onRename("canvas", name)} onDelete={() => onDelete({ kind: "canvas", name })} nodes={name === canvasName ? nodes : []} onNodeRename={(node) => onRename("node", node.name, node.id)} onNodeDelete={(node) => onDelete({ kind: "node", name: node.name, id: node.id })} onSetPrimary={onSetPrimary} />)}
             <button type="button" className="workspace-add-canvas" onClick={onAddCanvas}><Plus /><span>New Canvas</span></button>
             <div className="workspace-tools" aria-label={`${workspaceName} tools`}>
-              <SidebarItem className="is-nested" icon={<Folder />}>Files</SidebarItem>
-              <SidebarItem className="is-nested" icon={<Settings />}>Environments</SidebarItem>
-              <SidebarItem className="is-nested" icon={<Bot />}>Agents</SidebarItem>
+              <SidebarItem className="is-nested" icon={<Folder />} active={activeSurface === "files"} onClick={() => onNavigate("files")}>Files</SidebarItem>
+              <SidebarItem className="is-nested" icon={<Settings />} active={activeSurface === "environments"} onClick={() => onNavigate("environments")}>Environments</SidebarItem>
+              <SidebarItem className="is-nested" icon={<Bot />} active={activeSurface === "agents"} onClick={() => onNavigate("agents")}>Agents</SidebarItem>
             </div>
           </WorkspaceRow>
           {otherWorkspaces.map((name) => <WorkspaceRow key={name} name={name} state={name === "OpenMAIC" ? canvasStates["Java Course"] : aggregateCanvasState([canvasStates["Literature Survey"], canvasStates["Evaluation Plan"]])} open={Boolean(otherWorkspaceOpen[name])} onToggle={() => setOtherWorkspaceOpen((open) => ({ ...open, [name]: !open[name] }))} onRename={() => onRename("workspace", name)} onDelete={() => onDelete({ kind: "workspace", name })}>
@@ -414,11 +533,11 @@ function WorkspaceNavigation({ workspaceName, workspaceNames, canvasName, canvas
           </WorkspaceRow>)}
         </SidebarDisclosure>
         <SidebarDisclosure label="Recent" open={recentOpen} onToggle={onToggleRecent}>
-          <SidebarItem icon={<History />}>Evaluation Plan</SidebarItem>
-          <SidebarItem icon={<History />}>Citation Review</SidebarItem>
+          <SidebarItem icon={<History />} onClick={() => onSelectCanvas("Evaluation Plan")}>Evaluation Plan</SidebarItem>
+          <SidebarItem icon={<History />} onClick={() => onSelectCanvas("Citation Review")}>Citation Review</SidebarItem>
         </SidebarDisclosure>
       </div>
-      <div className="sidebar-footer"><SidebarItem icon={<Settings />}>Settings</SidebarItem></div>
+      <div className="sidebar-footer"><SidebarItem icon={<Settings />} active={activeSurface === "settings"} onClick={() => onNavigate("settings")}>Settings</SidebarItem></div>
     </div>
   );
 }
@@ -494,10 +613,12 @@ interface CanvasPreviewProps {
   onRun: () => void;
   onToggleRunPanel: () => void;
   runPanelOpen: boolean;
+  onAddCanvas: () => void;
 }
 
-function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewWorkspace, nodeLibraryOpen, onToggleNodeLibrary, onCloseNodeLibrary, runHistoryOpen, onToggleRunHistory, onCloseRunHistory, nodes, onAddNode, canRun, runState, onRun, onToggleRunPanel, runPanelOpen }: CanvasPreviewProps) {
+function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled, onWorkspaceChange, onScopeClear, onScopeEnable, onStart, onNewWorkspace, nodeLibraryOpen, onToggleNodeLibrary, onCloseNodeLibrary, runHistoryOpen, onToggleRunHistory, onCloseRunHistory, nodes, onAddNode, canRun, runState, onRun, onToggleRunPanel, runPanelOpen, onAddCanvas }: CanvasPreviewProps) {
   const [connectionSource, setConnectionSource] = useState<{ nodeId: string; portId: string; kind: "data" | "flow" | "event" | "resource" } | null>(null);
+  const [zoom, setZoom] = useState(100);
   const addNode = (nodeName: string) => {
     onAddNode(nodeName);
     onCloseNodeLibrary();
@@ -513,7 +634,7 @@ function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled
 
   return (
     <div className="canvas-preview">
-      <div className="canvas-tabbar"><div className="canvas-tab is-active"><PanelsTopLeft /><span>{canvasTitle}</span></div><button aria-label="New canvas tab" title="New canvas tab"><Plus /></button></div>
+      <div className="canvas-tabbar"><div className="canvas-tab is-active"><PanelsTopLeft /><span>{canvasTitle}</span></div><button type="button" aria-label="New canvas tab" title="New canvas tab" onClick={onAddCanvas}><Plus /></button></div>
       <div className="canvas-breadcrumb"><span>{workspaceName}</span><ChevronRight /><strong>{canvasTitle}</strong></div>
       <div className="canvas-actions" aria-label="Canvas actions">
         <Tooltip content="Add node" side="top"><IconButton label="Add node" active={nodeLibraryOpen} onClick={onToggleNodeLibrary}><Blocks /></IconButton></Tooltip>
@@ -541,10 +662,50 @@ function CanvasPreview({ workspaceName, canvasTitle, canvasStarted, scopeEnabled
         onNewWorkspace={onNewWorkspace}
         onSubmit={onStart}
       />
-      <div className="canvas-zoom"><button aria-label="Zoom out" title="Zoom out"><Minus /></button><span>100%</span><button aria-label="Zoom in" title="Zoom in"><Plus /></button></div>
+      <div className="canvas-zoom"><button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => setZoom((value) => Math.max(50, value - 10))}><Minus /></button><span>{zoom}%</span><button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => setZoom((value) => Math.min(200, value + 10))}><Plus /></button></div>
     </div>
   );
 }
+
+function SurfaceHeader({ eyebrow, title, description, icon, action }: { eyebrow: string; title: string; description: string; icon: ReactNode; action?: ReactNode }) {
+  return <header className="surface-header"><div className="surface-header__icon">{icon}</div><div className="surface-header__copy"><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action ? <div className="surface-header__action">{action}</div> : null}</header>;
+}
+
+function SurfaceSection({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return <section className="surface-section"><div className="surface-section__heading"><div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div></div>{children}</section>;
+}
+
+function AutomationsPage({ automations, onCreate, onEdit, onToggle, onRun, onDelete }: { automations: AutomationRecord[]; onCreate: () => void; onEdit: (automation: AutomationRecord) => void; onToggle: (id: string, enabled: boolean) => void; onRun: (automation: AutomationRecord) => void; onDelete: (id: string) => void }) {
+  return <div className="surface-page">
+    <SurfaceHeader eyebrow="Workspace automation" title="Automations" description="Schedule canvas entrypoints and keep recurring work visible." icon={<CalendarClock />} action={<Button variant="primary" leadingIcon={<Plus />} onClick={onCreate}>New Automation</Button>} />
+    <div className="surface-metric-grid"><div><span>Active automations</span><strong>{automations.filter((item) => item.enabled).length}</strong></div><div><span>Next scheduled run</span><strong>{automations.find((item) => item.enabled)?.nextRun ?? "None"}</strong></div><div><span>Last 7 days</span><strong>18 runs</strong></div></div>
+    <SurfaceSection title="Schedules" description="Changes apply to future runs. Existing runs keep their recorded configuration.">
+      <div className="automation-list">{automations.map((automation) => <article className="automation-row" key={automation.id}><div className="automation-row__icon"><CalendarClock /></div><div className="automation-row__main"><div className="automation-row__title"><strong>{automation.name}</strong><StatusBadge tone={automation.enabled ? "success" : "neutral"} dot>{automation.enabled ? "Active" : "Paused"}</StatusBadge></div><span>{automation.canvas} · {automation.schedule}</span><small>Next: {automation.nextRun} · Last: {automation.lastRun}</small></div><div className="automation-row__controls"><Switch label="" aria-label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`} checked={automation.enabled} onChange={(event) => onToggle(automation.id, event.target.checked)} /><Menu label={`${automation.name} actions`} icon={<MoreHorizontal />} iconOnly items={[{ label: "Run now", icon: <Play />, onSelect: () => onRun(automation) }, { label: "Edit", icon: <Pencil />, onSelect: () => onEdit(automation) }, { label: "Delete", icon: <Trash2 />, separatorBefore: true, onSelect: () => onDelete(automation.id) }]} /></div></article>)}{automations.length === 0 ? <EmptySurface icon={<CalendarClock />} title="No automations yet" description="Create a schedule to run a canvas without opening it." action={<Button variant="primary" onClick={onCreate}>Create Automation</Button>} /> : null}</div>
+    </SurfaceSection>
+  </div>;
+}
+
+function ExtensionsPage({ extensions, onToggle, onInstall, onUpdate, onUninstall, onNotice }: { extensions: ExtensionRecord[]; onToggle: (id: string, enabled: boolean) => void; onInstall: (id: string) => void; onUpdate: (id: string) => void; onUninstall: (id: string) => void; onNotice: (message: string) => void }) {
+  const [query, setQuery] = useState("");
+  const filtered = extensions.filter((extension) => `${extension.name} ${extension.description}`.toLowerCase().includes(query.toLowerCase()));
+  return <div className="surface-page">
+    <SurfaceHeader eyebrow="Workspace capabilities" title="Extensions" description="Connect approved capabilities to the active workspace." icon={<Box />} action={<div className="surface-search"><Search /><input aria-label="Search extensions" placeholder="Search extensions" value={query} onChange={(event) => setQuery(event.target.value)} /></div>} />
+    <SurfaceSection title="Extension catalog" description="Installed extensions run within the workspace policy boundary.">
+      <div className="extension-grid">{filtered.map((extension) => <article className={`extension-card ${extension.installed ? "is-installed" : ""}`} key={extension.id}><div className="extension-card__top"><div className="extension-card__icon">{extension.icon}</div><div className="extension-card__heading"><strong>{extension.name}</strong><span>{extension.publisher} · v{extension.version}</span></div>{extension.installed ? <StatusBadge tone={extension.enabled ? "success" : "neutral"} dot>{extension.enabled ? "Enabled" : "Disabled"}</StatusBadge> : null}</div><p>{extension.description}</p><div className="extension-card__footer">{extension.installed ? <><Switch label="" aria-label={`${extension.enabled ? "Disable" : "Enable"} ${extension.name}`} checked={extension.enabled} onChange={(event) => onToggle(extension.id, event.target.checked)} /><div className="extension-card__actions">{extension.updateAvailable ? <Button size="small" leadingIcon={<ArrowUpFromLine />} onClick={() => onUpdate(extension.id)}>Update</Button> : null}<Menu label={`${extension.name} actions`} icon={<MoreHorizontal />} iconOnly items={[{ label: "View permissions", icon: <ShieldCheck />, onSelect: () => onNotice(`${extension.name} requests workspace-scoped access only.`) }, { label: "Open documentation", icon: <ExternalLink />, onSelect: () => onNotice(`${extension.name} documentation opened in the preview.`) }, { label: "Uninstall", icon: <Trash2 />, separatorBefore: true, onSelect: () => onUninstall(extension.id) }]} /></div></> : <Button size="small" variant="primary" leadingIcon={<Plus />} onClick={() => onInstall(extension.id)}>Install</Button>}</div></article>)}{filtered.length === 0 ? <EmptySurface icon={<Search />} title="No matching extensions" description="Try a different search term." /> : null}</div>
+    </SurfaceSection>
+  </div>;
+}
+
+function SettingsPage({ section, onSectionChange, settings, onChange }: { section: string; onSectionChange: (section: string) => void; settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void }) {
+  const sections = [{ id: "general", label: "General", icon: <SlidersHorizontal /> }, { id: "notifications", label: "Notifications", icon: <Bell /> }, { id: "execution", label: "Execution", icon: <Cpu /> }, { id: "privacy", label: "Privacy", icon: <ShieldCheck /> }];
+  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections">{sections.map((item) => <button type="button" className={section === item.id ? "is-active" : ""} key={item.id} onClick={() => onSectionChange(item.id)}>{item.icon}<span>{item.label}</span><ChevronRight /></button>)}</nav><div className="settings-content">{section === "general" ? <SurfaceSection title="General" description="Appearance and startup preferences."><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Reopen last workspace" description="Restore the most recent workspace on launch." checked={settings.reopenLastWorkspace} onChange={(event) => onChange("reopenLastWorkspace", event.target.checked)} /></SurfaceSection> : null}{section === "notifications" ? <SurfaceSection title="Notifications" description="Choose which events can interrupt your work."><Switch label="Successful runs" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed runs" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /></SurfaceSection> : null}{section === "execution" ? <SurfaceSection title="Execution" description="Defaults for runs started from this application."><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /><div className="settings-callout"><ShieldCheck /><span><strong>Restricted local execution</strong><small>Read-only workspace access · network disabled · 10 minute limit</small></span><StatusBadge tone="success" dot>Default</StatusBadge></div></SurfaceSection> : null}{section === "privacy" ? <SurfaceSection title="Privacy" description="Data sharing stays disabled unless you explicitly enable it."><Switch label="Product telemetry" description="Share anonymous interaction data to improve the UI lab." checked={settings.telemetry} onChange={(event) => onChange("telemetry", event.target.checked)} /><div className="settings-callout"><KeyRound /><span><strong>Secrets stay local</strong><small>Credentials are referenced by ID and never included in canvas events.</small></span></div></SurfaceSection> : null}</div></div></div>;
+}
+
+function FilesPage({ workspaceName, onNotice }: { workspaceName: string; onNotice: (message: string) => void }) { return <div className="surface-page"><SurfaceHeader eyebrow="Workspace content" title="Files" description={`Browse artifacts and source files available to ${workspaceName}.`} icon={<Folder />} action={<Button leadingIcon={<ArrowUpFromLine />} onClick={() => onNotice("Import is ready for a local file.")}>Import</Button>} /><SurfaceSection title="Recent files" description="Files are scoped to this workspace."><div className="file-list">{["research-notes.md", "citation-review.json", "experiment-report.md", "sources.bib"].map((file, index) => <button type="button" key={file} onClick={() => onNotice(`${file} opened in preview.`)}><FileCode2 /><span><strong>{file}</strong><small>{index % 2 ? "Generated artifact" : "Workspace file"} · {index + 2} KB</small></span><ExternalLink /></button>)}</div></SurfaceSection></div>; }
+function EnvironmentsPage({ onNotice }: { onNotice: (message: string) => void }) { const [selected, setSelected] = useState("LocalRestricted"); return <div className="surface-page"><SurfaceHeader eyebrow="Execution boundary" title="Environments" description="Choose where nodes execute and inspect the active safety limits." icon={<Cpu />} /><SurfaceSection title="Execution profiles" description="The preview only exposes restricted local execution."><div className="environment-list">{[{ id: "LocalRestricted", title: "Local Restricted", detail: "Read-only workspace · no network · cancellable", tone: "success" as const }, { id: "DockerSandbox", title: "Docker Sandbox", detail: "Unavailable until the host runtime is connected", tone: "neutral" as const }].map((item) => <button type="button" className={selected === item.id ? "is-selected" : ""} key={item.id} onClick={() => { setSelected(item.id); onNotice(`${item.title} selected.`); }}><div><strong>{item.title}</strong><span>{item.detail}</span></div><StatusBadge tone={item.tone} dot>{item.id === "LocalRestricted" ? "Active" : "Coming soon"}</StatusBadge></button>)}</div></SurfaceSection></div>; }
+function AgentsPage({ onNotice }: { onNotice: (message: string) => void }) { const [enabled, setEnabled] = useState(true); return <div className="surface-page"><SurfaceHeader eyebrow="Delegated work" title="Agents" description="Manage the agents that can propose and execute structured work." icon={<Bot />} action={<Button leadingIcon={<UserRoundCog />} onClick={() => onNotice("Agent invite flow opened.")}>Add Agent</Button>} /><SurfaceSection title="Workspace agents" description="Agents inherit the workspace policy and cannot silently expand authority."><div className="agent-list"><div className="agent-row"><div className="agent-avatar"><Bot /></div><div><strong>Research Agent</strong><span>Drafts summaries and proposes graph patches</span><small>Last active 4 minutes ago · Restricted</small></div><Switch label="" aria-label="Enable Research Agent" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); onNotice(event.target.checked ? "Research Agent enabled." : "Research Agent paused."); }} /></div></div></SurfaceSection></div>; }
+
+function EmptySurface({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) { return <div className="surface-empty"><div>{icon}</div><strong>{title}</strong><p>{description}</p>{action}</div>; }
 
 function AddedCanvasNode({ node: nodeSummary, index, activePortKey, acceptingConnectionKind, onPortConnect }: { node: NodeSummary; index: number; activePortKey: string | null; acceptingConnectionKind: "data" | "flow" | "event" | "resource" | null | undefined; onPortConnect: (portId: string, direction: "input" | "output", kind: "data" | "flow" | "event" | "resource") => void }) {
   const node = nodeSummary.name === "Text Input"
