@@ -370,20 +370,33 @@ export interface NotificationProps {
   children: ReactNode;
   icon: ReactNode;
   time?: string;
+  /** Auto-dismiss delay in milliseconds. Use 0 or a negative value to keep it visible. */
+  duration?: number;
   onDismiss?: () => void;
 }
 
 /** A transient, system-style banner for low-risk completion feedback. */
-export function Notification({ title, children, icon, time = "now", onDismiss }: NotificationProps) {
+export function Notification({ title, children, icon, time = "now", duration = 5000, onDismiss }: NotificationProps) {
   const [closing, setClosing] = useState(false);
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+
   const dismiss = () => {
-    if (onDismiss && !closing) setClosing(true);
+    if (onDismissRef.current && !closing) setClosing(true);
   };
+
+  useEffect(() => {
+    if (duration <= 0 || !onDismissRef.current) return;
+    const timer = window.setTimeout(() => setClosing(true), duration);
+    return () => window.clearTimeout(timer);
+  }, [duration]);
+
   return <div className={`sk-macos-notification ${closing ? "is-closing" : ""}`} role="status" onClick={dismiss} onAnimationEnd={() => {
-    if (closing) onDismiss?.();
+    if (closing) onDismissRef.current?.();
   }}>
     <span className="sk-macos-notification__icon" aria-hidden="true">{icon}</span>
     <span className="sk-macos-notification__content"><strong>{title}</strong><span>{children}</span></span>
     <time>{time}</time>
+    {onDismiss ? <button type="button" className="sk-macos-notification__close" aria-label={`Dismiss ${title}`} onClick={(event) => { event.stopPropagation(); dismiss(); }}><X /></button> : null}
   </div>;
 }

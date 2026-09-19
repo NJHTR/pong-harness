@@ -107,9 +107,11 @@ interface ExtensionRecord {
 }
 
 interface AppNotice {
+  id: string;
   title: string;
   message: string;
   tone?: "success" | "info";
+  duration?: number;
 }
 
 interface SettingsState {
@@ -190,8 +192,7 @@ function WorkbenchPreview() {
     "Java Course": "waiting",
   });
   const [activeRunCanvas, setActiveRunCanvas] = useState<string | null>(null);
-  const [completedCanvas, setCompletedCanvas] = useState<string | null>(null);
-  const [appNotice, setAppNotice] = useState<AppNotice | null>(null);
+  const [appNotices, setAppNotices] = useState<AppNotice[]>([]);
   const [automations, setAutomations] = useState<AutomationRecord[]>([
     { id: "morning-review", name: "Morning literature review", canvas: "Citation Review", schedule: "Every weekday at 09:00", nextRun: "Mon, 09:00", lastRun: "Today, 09:01 · Succeeded", enabled: true },
     { id: "weekly-report", name: "Weekly experiment digest", canvas: "Experiment Report", schedule: "Every Friday at 17:30", nextRun: "Fri, 17:30", lastRun: "Sep 12, 17:34 · Succeeded", enabled: true },
@@ -212,6 +213,13 @@ function WorkbenchPreview() {
   const [settingsSection, setSettingsSection] = useState("general");
   const [settingsState, setSettingsState] = useState<SettingsState>({ compactSidebar: false, reduceMotion: false, notifySuccess: true, notifyFailure: true, confirmDestructive: true, reopenLastWorkspace: true, allowBackgroundRuns: false, telemetry: false });
 
+  const pushNotice = (notice: Omit<AppNotice, "id">) => {
+    const nextNotice = { ...notice, id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, duration: notice.duration ?? 5000 };
+    setAppNotices((items) => [nextNotice, ...items].slice(0, 4));
+  };
+
+  const dismissNotice = (noticeId: string) => setAppNotices((items) => items.filter((item) => item.id !== noticeId));
+
   useEffect(() => {
     if (!mockSnapshot.workspaces.length) return;
     const activeWorkspace = mockSnapshot.workspaces.find((workspace) => workspace.name === workspaceName) ?? mockSnapshot.workspaces[0];
@@ -229,7 +237,10 @@ function WorkbenchPreview() {
   useEffect(() => mockApi.subscribe((event) => {
     if (event.type === "canvas.updated") {
       setCanvasStates((states) => ({ ...states, [event.canvas.name]: event.canvas.status as CanvasRuntimeState }));
-      if (event.canvas.status === "success" && event.canvas.latestRunId) setCompletedCanvas(event.canvas.name);
+      if (event.canvas.status === "success" && event.canvas.latestRunId) {
+        pushNotice({ title: "Canvas completed", message: `${event.canvas.name} finished successfully. Review its output and artifacts.`, duration: 7000 });
+      }
+      if (event.canvas.status === "success" || event.canvas.status === "error") setActiveRunCanvas(null);
     }
   }), []);
 
@@ -237,7 +248,6 @@ function WorkbenchPreview() {
     if (!activeRunCanvas) return;
     const timer = window.setTimeout(() => {
       setCanvasStates((states) => ({ ...states, [activeRunCanvas]: "success" }));
-      setCompletedCanvas(activeRunCanvas);
       setActiveRunCanvas(null);
     }, 1800);
     return () => window.clearTimeout(timer);
@@ -292,7 +302,7 @@ function WorkbenchPreview() {
     if (editingAutomationId) setAutomations((items) => items.map((item) => item.id === editingAutomationId ? { ...item, name, canvas: automationCanvas, schedule: automationSchedule } : item));
     else setAutomations((items) => [{ id: `automation-${Date.now()}`, name, canvas: automationCanvas, schedule: automationSchedule, nextRun: "Tomorrow, 09:00", lastRun: "Never", enabled: true }, ...items]);
     setAutomationDialogOpen(false);
-    setAppNotice({ title: editingAutomationId ? "Automation updated" : "Automation created", message: `${name} is ready.` });
+    pushNotice({ title: editingAutomationId ? "Automation updated" : "Automation created", message: `${name} is ready.` });
   };
   const updateSetting = (key: keyof typeof settingsState, value: boolean) => setSettingsState((state) => ({ ...state, [key]: value }));
 
@@ -407,15 +417,16 @@ function WorkbenchPreview() {
           runPanelOpen={bottomOpen}
           onAddCanvas={createCanvas}
         /> : null}
-        {surface === "automations" ? <AutomationsPage automations={automations} onCreate={() => openAutomationDialog()} onEdit={openAutomationDialog} onToggle={(id, enabled) => setAutomations((items) => items.map((item) => item.id === id ? { ...item, enabled, nextRun: enabled ? "Tomorrow, 09:00" : "Paused" } : item))} onRun={(automation) => setAppNotice({ title: "Automation started", message: `${automation.name} is running on ${automation.canvas}.`, tone: "info" })} onDelete={(id) => setAutomations((items) => items.filter((item) => item.id !== id))} /> : null}
-        {surface === "extensions" ? <ExtensionsPage extensions={extensions} onToggle={(id, enabled) => setExtensions((items) => items.map((item) => item.id === id ? { ...item, enabled } : item))} onInstall={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, installed: true, enabled: true } : item)); setAppNotice({ title: "Extension installed", message: "The extension is ready for this workspace." }); }} onUpdate={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, updateAvailable: false } : item)); setAppNotice({ title: "Extension updated", message: "The latest extension manifest is installed." }); }} onUninstall={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, installed: false, enabled: false } : item)); setAppNotice({ title: "Extension uninstalled", message: "The extension was removed from this workspace." }); }} onNotice={(message) => setAppNotice({ title: "Extension details", message, tone: "info" })} /> : null}
+        {surface === "automations" ? <AutomationsPage automations={automations} onCreate={() => openAutomationDialog()} onEdit={openAutomationDialog} onToggle={(id, enabled) => setAutomations((items) => items.map((item) => item.id === id ? { ...item, enabled, nextRun: enabled ? "Tomorrow, 09:00" : "Paused" } : item))} onRun={(automation) => pushNotice({ title: "Automation started", message: `${automation.name} is running on ${automation.canvas}.`, tone: "info" })} onDelete={(id) => setAutomations((items) => items.filter((item) => item.id !== id))} /> : null}
+        {surface === "extensions" ? <ExtensionsPage extensions={extensions} onToggle={(id, enabled) => setExtensions((items) => items.map((item) => item.id === id ? { ...item, enabled } : item))} onInstall={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, installed: true, enabled: true } : item)); pushNotice({ title: "Extension installed", message: "The extension is ready for this workspace." }); }} onUpdate={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, updateAvailable: false } : item)); pushNotice({ title: "Extension updated", message: "The latest extension manifest is installed." }); }} onUninstall={(id) => { setExtensions((items) => items.map((item) => item.id === id ? { ...item, installed: false, enabled: false } : item)); pushNotice({ title: "Extension uninstalled", message: "The extension was removed from this workspace." }); }} onNotice={(message) => pushNotice({ title: "Extension details", message, tone: "info", duration: 8000 })} /> : null}
         {surface === "settings" ? <SettingsPage section={settingsSection} onSectionChange={setSettingsSection} settings={settingsState} onChange={updateSetting} /> : null}
-        {surface === "files" ? <FilesPage workspaceName={workspaceName} onNotice={(message) => setAppNotice({ title: "Workspace files", message })} /> : null}
-        {surface === "environments" ? <EnvironmentsPage onNotice={(message) => setAppNotice({ title: "Environment updated", message })} /> : null}
-        {surface === "agents" ? <AgentsPage onNotice={(message) => setAppNotice({ title: "Agent updated", message })} /> : null}
+        {surface === "files" ? <FilesPage workspaceName={workspaceName} onNotice={(message) => pushNotice({ title: "Workspace files", message })} /> : null}
+        {surface === "environments" ? <EnvironmentsPage onNotice={(message) => pushNotice({ title: "Environment updated", message })} /> : null}
+        {surface === "agents" ? <AgentsPage onNotice={(message) => pushNotice({ title: "Agent updated", message })} /> : null}
       </WindowFrame>
-      {completedCanvas ? <Notification title="Canvas completed" icon={<CheckCircle2 />} time="now" onDismiss={() => setCompletedCanvas(null)}>{completedCanvas} finished successfully. Review its output and artifacts.</Notification> : null}
-      {appNotice ? <Notification title={appNotice.title} icon={appNotice.tone === "info" ? <Bell /> : <CheckCircle2 />} time="now" onDismiss={() => setAppNotice(null)}>{appNotice.message}</Notification> : null}
+      {appNotices.length ? <div className="notification-stack" aria-label="Notifications" aria-live="polite">
+        {appNotices.map((notice) => <Notification key={notice.id} title={notice.title} icon={notice.tone === "info" ? <Bell /> : <CheckCircle2 />} time="now" duration={notice.duration} onDismiss={() => dismissNotice(notice.id)}>{notice.message}</Notification>)}
+      </div> : null}
       <Dialog
         open={automationDialogOpen}
         title={editingAutomationId ? "Edit Automation" : "New Automation"}

@@ -393,6 +393,26 @@ button, input, textarea { font-family: inherit; }
 .swift-app-mark { display: inline-grid; place-items: center; width: 100%; height: 100%; font-size: 11px; font-weight: 600; letter-spacing: 0; }
 .gallery-window .sk-messagebox__icon, .sk-macos-notification__icon:has(.swift-app-mark) { background: linear-gradient(155deg, #ff9b36, #f13c26); }
 
+.notification-stack {
+  position: fixed;
+  z-index: 190;
+  top: 10px;
+  right: 10px;
+  width: min(346px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.notification-stack .sk-macos-notification {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  pointer-events: auto;
+}
+
 @media (max-width: 900px) {
   .lab { padding: 8px; }
   .lab[data-sk-view="components"] { padding: 0; }
