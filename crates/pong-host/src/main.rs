@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use pong_core::{Canvas, CanvasRevision, Notification, Run, RunStatus, Workspace};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,11 @@ struct CreateWorkspace {
 #[serde(rename_all = "camelCase")]
 struct CreateCanvas {
     workspace_id: Uuid,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RenameInput {
     name: String,
 }
 
@@ -115,6 +120,25 @@ async fn create_workspace(
     (StatusCode::CREATED, Json(item))
 }
 
+async fn rename_workspace(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<Uuid>,
+    Json(input): Json<RenameInput>,
+) -> Result<Json<Workspace>, StatusCode> {
+    let mut store = state.inner.lock().unwrap();
+    let workspace = store
+        .workspaces
+        .get_mut(&workspace_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    workspace.name = name.to_string();
+    workspace.updated_at = now();
+    Ok(Json(workspace.clone()))
+}
+
 async fn list_canvases(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
@@ -152,6 +176,25 @@ async fn create_canvas(
         .canvases
         .insert(item.id, item.clone());
     (StatusCode::CREATED, Json(item))
+}
+
+async fn rename_canvas(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<Uuid>,
+    Json(input): Json<RenameInput>,
+) -> Result<Json<Canvas>, StatusCode> {
+    let mut store = state.inner.lock().unwrap();
+    let canvas = store
+        .canvases
+        .get_mut(&canvas_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    canvas.name = name.to_string();
+    canvas.updated_at = now();
+    Ok(Json(canvas.clone()))
 }
 
 async fn save_revision(
@@ -258,13 +301,15 @@ async fn main() {
             "/api/workspaces",
             get(list_workspaces).post(create_workspace),
         )
+        .route("/api/workspaces/{workspace_id}", patch(rename_workspace))
         .route(
-            "/api/workspaces/:workspace_id/canvases",
+            "/api/workspaces/{workspace_id}/canvases",
             get(list_canvases).post(create_canvas),
         )
-        .route("/api/canvases/:canvas_id/revisions", post(save_revision))
+        .route("/api/canvases/{canvas_id}/revisions", post(save_revision))
+        .route("/api/canvases/{canvas_id}", patch(rename_canvas))
         .route(
-            "/api/canvases/:canvas_id/runs",
+            "/api/canvases/{canvas_id}/runs",
             get(list_runs).post(start_run),
         )
         .layer(CorsLayer::permissive())

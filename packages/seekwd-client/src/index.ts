@@ -40,7 +40,45 @@ export function createLocalHostClient(): HostClient {
 }
 
 export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317"): HostClient {
-  const local = createLocalHostClient();
-  void baseUrl;
-  return local;
+  const root = baseUrl.replace(/\/$/, "");
+  const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
+    const response = await fetch(`${root}${path}`, {
+      ...init,
+      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || `Host request failed (${response.status})`);
+    }
+    return response.json() as Promise<T>;
+  };
+  const client: HostClient = {
+    snapshot: () => request<HostSnapshot>("/api/snapshot"),
+    createWorkspace: (input) => request<Workspace>("/api/workspaces", { method: "POST", body: JSON.stringify(input) }),
+    renameWorkspace: (id, name) => request<Workspace>(`/api/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+    createCanvas: (input) => request<Canvas>(`/api/workspaces/${input.workspaceId}/canvases`, { method: "POST", body: JSON.stringify(input) }),
+    renameCanvas: (id, name) => request<Canvas>(`/api/canvases/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+    saveRevision: (canvasId) => request<CanvasRevision>(`/api/canvases/${canvasId}/revisions`, { method: "POST" }),
+    startRun: (input) => request<Run>(`/api/canvases/${input.canvasId}/runs`, { method: "POST", body: JSON.stringify(input) }),
+    subscribe(listener) {
+      let active = true;
+      let previous = "";
+      const poll = async () => {
+        try {
+          const next = await client.snapshot();
+          const serialized = JSON.stringify(next);
+          if (active && serialized !== previous) {
+            previous = serialized;
+            listener(next);
+          }
+        } catch {
+          // The next poll retries after a transient Host disconnect.
+        }
+        if (active) window.setTimeout(poll, 1000);
+      };
+      void poll();
+      return () => { active = false; };
+    },
+  };
+  return client;
 }
