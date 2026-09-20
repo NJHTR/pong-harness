@@ -1,12 +1,14 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Bell, ChevronDown, ChevronRight, CircleCheck, CirclePlay, Folder, FolderPlus, GitBranch, Pencil, Play, Plus, Save, Sparkles } from "lucide-react";
-import { createLocalHostClient } from "@seekwd/client";
+import { createHttpHostClient, createLocalHostClient } from "@seekwd/client";
 import type { Canvas, HostSnapshot, Workspace } from "@seekwd/protocol-schema";
 import "@seekwd/ui/styles.css";
 import "./workbench.css";
 
-const client = createLocalHostClient();
+const client = import.meta.env.VITE_HOST_URL
+  ? createHttpHostClient(import.meta.env.VITE_HOST_URL)
+  : createLocalHostClient();
 
 function App() {
   const [snapshot, setSnapshot] = useState<HostSnapshot>({ workspaces: [], canvases: [], revisions: [], runs: [], notifications: [] });
@@ -29,6 +31,7 @@ function App() {
   const createCanvas = async () => { if (!activeWorkspace) return; const item = await client.createCanvas({ workspaceId: activeWorkspace.id, name: "Untitled Canvas" }); setCanvasId(item.id); };
   const renameCanvas = async () => { if (!activeCanvas) return; const name = window.prompt("Canvas name", activeCanvas.name); if (name) await client.renameCanvas(activeCanvas.id, name); };
   const saveRevision = async () => { if (!activeCanvas) return; const revision = await client.saveRevision(activeCanvas.id); setNotice(`Revision ${revision.revision} saved`); };
+  const configureEntrypoint = async () => { if (!activeCanvas) return; await client.setDefaultEntrypoint(activeCanvas.id, "node_start"); setNotice("Default entrypoint configured"); };
 
   return <main className="workbench" data-sk-theme="light">
     <aside className="navigation">
@@ -40,7 +43,7 @@ function App() {
       <footer className="nav-footer"><div><span className="status-dot" />Local host connected</div><span className="version">v0.1 vertical slice</span></footer>
     </aside>
     <section className="surface">
-      <header className="surface-header"><div><span className="eyebrow">{activeWorkspace?.name ?? "Workspace"}</span><h1>{activeCanvas?.name ?? "Select a canvas"}</h1><p>{activeCanvas ? `Revision ${activeCanvas.revision} · ${activeCanvas.status}` : "Create a canvas to begin"}</p></div><div className="header-actions"><button className="quiet-button" onClick={renameCanvas} disabled={!activeCanvas}><Pencil size={15} />Rename</button><button className="quiet-button" onClick={saveRevision} disabled={!activeCanvas}><Save size={15} />Save revision</button><button className="run-button" onClick={run} disabled={!activeCanvas || !activeCanvas.defaultEntrypointNodeId || Boolean(currentRun)}><Play size={15} />{currentRun ? "Running" : "Run"}</button></div></header>
+      <header className="surface-header"><div><span className="eyebrow">{activeWorkspace?.name ?? "Workspace"}</span><h1>{activeCanvas?.name ?? "Select a canvas"}</h1><p>{activeCanvas ? `Revision ${activeCanvas.revision} · ${activeCanvas.status}` : "Create a canvas to begin"}</p></div><div className="header-actions"><button className="quiet-button" onClick={renameCanvas} disabled={!activeCanvas}><Pencil size={15} />Rename</button><button className="quiet-button" onClick={saveRevision} disabled={!activeCanvas}><Save size={15} />Save revision</button>{activeCanvas && !activeCanvas.defaultEntrypointNodeId ? <button className="quiet-button" onClick={configureEntrypoint}><CirclePlay size={15} />Set start</button> : null}<button className="run-button" onClick={run} disabled={!activeCanvas || !activeCanvas.defaultEntrypointNodeId || Boolean(currentRun)}><Play size={15} />{currentRun ? "Running" : "Run"}</button></div></header>
       <div className="canvas-area">{activeCanvas ? <><div className="canvas-toolbar"><span><GitBranch size={15} />Graph editor</span><span className="revision-pill">{latestRevision ? `Latest revision ${latestRevision.revision}` : "No revision saved"}</span></div><div className="graph"><div className="node start-node"><span className="node-icon"><CirclePlay size={16} /></span><div><strong>Start</strong><small>Default entrypoint</small></div><span className="port output" /></div><div className="edge-line" /><div className="node task-node"><span className="node-icon"><CircleCheck size={16} /></span><div><strong>Review sources</strong><small>Agent task</small></div><span className="port input" /></div><div className="empty-hint">Canvas graph is ready for nodes and connections.</div></div></> : <div className="empty-state"><Folder size={24} /><strong>No canvas selected</strong><span>Create a canvas from the left navigation.</span></div>}</div>
     </section>
     <aside className="inspector"><div className="inspector-head"><span>RUN INSPECTOR</span><span className={`state-chip ${activeCanvas?.status ?? "idle"}`}>{activeCanvas?.status ?? "idle"}</span></div><section><h2>Canvas</h2><dl><div><dt>Entrypoint</dt><dd>{activeCanvas?.defaultEntrypointNodeId ? "Default · Start" : "Not configured"}</dd></div><div><dt>Revision</dt><dd>{activeCanvas?.revision ?? "-"}</dd></div><div><dt>Latest run</dt><dd>{activeCanvas ? (snapshot.runs.find((run) => run.canvasId === activeCanvas.id)?.status ?? "None") : "-"}</dd></div></dl></section><section><h2>Next step</h2><p className="inspector-copy">This slice proves the Host boundary. The next runtime increment adds a real LocalRestricted worker behind the same Run command.</p></section></aside>

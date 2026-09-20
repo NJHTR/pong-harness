@@ -10,5 +10,6 @@ export interface Notification { id: Id; title: string; message: string; severity
 export interface CreateWorkspaceInput { name: string; path: string; }
 export interface CreateCanvasInput { workspaceId: Id; name: string; }
 export interface StartRunInput { canvasId: Id; revision: number; entrypoint: "default"; idempotencyKey: string; }
+export interface SetDefaultEntrypointInput { canvasId: Id; nodeId: Id; }
 
 export interface HostSnapshot { workspaces: Workspace[]; canvases: Canvas[]; revisions: CanvasRevision[]; runs: Run[]; notifications: Notification[]; }

@@ -46,6 +46,12 @@ struct RenameInput {
     name: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EntrypointInput {
+    node_id: Uuid,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
@@ -197,6 +203,21 @@ async fn rename_canvas(
     Ok(Json(canvas.clone()))
 }
 
+async fn set_default_entrypoint(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<Uuid>,
+    Json(input): Json<EntrypointInput>,
+) -> Result<Json<Canvas>, StatusCode> {
+    let mut store = state.inner.lock().unwrap();
+    let canvas = store
+        .canvases
+        .get_mut(&canvas_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    canvas.default_entrypoint_node_id = Some(input.node_id);
+    canvas.updated_at = now();
+    Ok(Json(canvas.clone()))
+}
+
 async fn save_revision(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
@@ -308,6 +329,10 @@ async fn main() {
         )
         .route("/api/canvases/{canvas_id}/revisions", post(save_revision))
         .route("/api/canvases/{canvas_id}", patch(rename_canvas))
+        .route(
+            "/api/canvases/{canvas_id}/entrypoint",
+            axum::routing::put(set_default_entrypoint),
+        )
         .route(
             "/api/canvases/{canvas_id}/runs",
             get(list_runs).post(start_run),

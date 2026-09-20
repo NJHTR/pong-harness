@@ -6,6 +6,7 @@ export interface HostClient {
   renameWorkspace(id: Id, name: string): Promise<Workspace>;
   createCanvas(input: CreateCanvasInput): Promise<Canvas>;
   renameCanvas(id: Id, name: string): Promise<Canvas>;
+  setDefaultEntrypoint(canvasId: Id, nodeId: Id): Promise<Canvas>;
   saveRevision(canvasId: Id): Promise<CanvasRevision>;
   startRun(input: StartRunInput): Promise<Run>;
   subscribe(listener: (snapshot: HostSnapshot) => void): () => void;
@@ -32,6 +33,7 @@ export function createLocalHostClient(): HostClient {
     async renameWorkspace(id, name) { const item = workspace(id); if (!item) throw new Error("Workspace not found"); item.name = name.trim(); item.updatedAt = now(); commit(); return structuredClone(item); },
     async createCanvas(input) { if (!workspace(input.workspaceId)) throw new Error("Workspace not found"); const item: Canvas = { id: uid("canvas"), workspaceId: input.workspaceId, name: input.name.trim() || "Untitled Canvas", status: "idle", defaultEntrypointNodeId: null, revision: 0, updatedAt: now() }; state.canvases.push(item); commit(); return structuredClone(item); },
     async renameCanvas(id, name) { const item = canvas(id); if (!item) throw new Error("Canvas not found"); item.name = name.trim(); item.updatedAt = now(); commit(); return structuredClone(item); },
+    async setDefaultEntrypoint(canvasId, nodeId) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); item.defaultEntrypointNodeId = nodeId; item.updatedAt = now(); commit(); return structuredClone(item); },
     async saveRevision(canvasId) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); item.revision += 1; item.updatedAt = now(); const revision: CanvasRevision = { id: uid("revision"), canvasId, revision: item.revision, createdAt: now(), createdBy: "user", status: "debug" }; state.revisions.push(revision); commit(); return structuredClone(revision); },
     async startRun(input) { const item = canvas(input.canvasId); if (!item) throw new Error("Canvas not found"); if (!item.defaultEntrypointNodeId) throw new Error("A default entrypoint is required"); if (input.revision !== item.revision) throw new Error("Revision is stale"); const run: Run = { id: uid("run"), canvasId: item.id, revision: input.revision, status: "running", startedAt: now() }; item.status = "running"; state.runs.unshift(run); commit(); window.setTimeout(() => { const current = state.runs.find((candidate) => candidate.id === run.id); const currentCanvas = canvas(item.id); if (!current || !currentCanvas || current.status !== "running") return; current.status = "succeeded"; current.finishedAt = now(); currentCanvas.status = "succeeded"; const notification: Notification = { id: uid("notification"), title: "Run completed", message: `${currentCanvas.name} completed successfully.`, severity: "success", createdAt: now(), canvasId: currentCanvas.id, runId: current.id }; state.notifications.unshift(notification); commit(); }, 1600); return structuredClone(run); },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
@@ -58,6 +60,7 @@ export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317"): HostCli
     renameWorkspace: (id, name) => request<Workspace>(`/api/workspaces/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
     createCanvas: (input) => request<Canvas>(`/api/workspaces/${input.workspaceId}/canvases`, { method: "POST", body: JSON.stringify(input) }),
     renameCanvas: (id, name) => request<Canvas>(`/api/canvases/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+    setDefaultEntrypoint: (canvasId, nodeId) => request<Canvas>(`/api/canvases/${canvasId}/entrypoint`, { method: "PUT", body: JSON.stringify({ nodeId }) }),
     saveRevision: (canvasId) => request<CanvasRevision>(`/api/canvases/${canvasId}/revisions`, { method: "POST" }),
     startRun: (input) => request<Run>(`/api/canvases/${input.canvasId}/runs`, { method: "POST", body: JSON.stringify(input) }),
     subscribe(listener) {
