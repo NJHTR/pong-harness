@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
-use pong_core::{Canvas, CanvasRevision, Notification, Run, RunStatus, Workspace};
+use pong_core::{Canvas, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -23,6 +23,7 @@ struct AppState {
 struct Store {
     workspaces: HashMap<Uuid, Workspace>,
     canvases: HashMap<Uuid, Canvas>,
+    nodes: HashMap<Uuid, CanvasNode>,
     revisions: HashMap<Uuid, CanvasRevision>,
     runs: HashMap<Uuid, Run>,
     notifications: HashMap<Uuid, Notification>,
@@ -104,6 +105,7 @@ impl IntoResponse for HostError {
 struct Snapshot {
     workspaces: Vec<Workspace>,
     canvases: Vec<Canvas>,
+    nodes: Vec<CanvasNode>,
     revisions: Vec<CanvasRevision>,
     runs: Vec<Run>,
     notifications: Vec<Notification>,
@@ -139,6 +141,7 @@ async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
     Json(Snapshot {
         workspaces: store.workspaces.values().cloned().collect(),
         canvases: store.canvases.values().cloned().collect(),
+        nodes: store.nodes.values().cloned().collect(),
         revisions: store.revisions.values().cloned().collect(),
         runs: store.runs.values().cloned().collect(),
         notifications: store.notifications.values().cloned().collect(),
@@ -213,12 +216,26 @@ async fn create_canvas(
         revision: 0,
         updated_at: now(),
     };
+    let start_node = CanvasNode {
+        id: Uuid::new_v4(),
+        canvas_id: item.id,
+        name: "Start".to_string(),
+        kind: "trigger.start".to_string(),
+    };
+    let mut item = item;
+    item.default_entrypoint_node_id = Some(start_node.id);
     state
         .inner
         .lock()
         .unwrap()
         .canvases
         .insert(item.id, item.clone());
+    state
+        .inner
+        .lock()
+        .unwrap()
+        .nodes
+        .insert(start_node.id, start_node);
     (StatusCode::CREATED, Json(item))
 }
 
@@ -247,10 +264,17 @@ async fn set_default_entrypoint(
     Json(input): Json<EntrypointInput>,
 ) -> Result<Json<Canvas>, StatusCode> {
     let mut store = state.inner.lock().unwrap();
+    let node_belongs_to_canvas = store
+        .nodes
+        .get(&input.node_id)
+        .is_some_and(|node| node.canvas_id == canvas_id);
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
         .ok_or(StatusCode::NOT_FOUND)?;
+    if !node_belongs_to_canvas {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
     canvas.default_entrypoint_node_id = Some(input.node_id);
     canvas.updated_at = now();
     Ok(Json(canvas.clone()))
