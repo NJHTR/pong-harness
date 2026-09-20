@@ -1,7 +1,8 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
 use pong_core::{Canvas, CanvasRevision, Notification, Run, RunStatus, Workspace};
@@ -59,6 +60,43 @@ struct StartRunInput {
     revision: u64,
     entrypoint: String,
     idempotency_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostErrorBody {
+    code: &'static str,
+    message: &'static str,
+    retryable: bool,
+}
+
+struct HostError {
+    status: StatusCode,
+    body: HostErrorBody,
+}
+
+impl HostError {
+    fn new(status: StatusCode, code: &'static str, message: &'static str, retryable: bool) -> Self {
+        Self {
+            status,
+            body: HostErrorBody {
+                code,
+                message,
+                retryable,
+            },
+        }
+    }
+}
+
+impl IntoResponse for HostError {
+    fn into_response(self) -> Response {
+        let mut response = (self.status, Json(self.body)).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        response
+    }
 }
 
 #[derive(Serialize)]
@@ -268,33 +306,77 @@ async fn start_run(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
     Json(input): Json<StartRunInput>,
-) -> Result<Json<Run>, StatusCode> {
+) -> Result<Json<Run>, HostError> {
     let mut store = state.inner.lock().unwrap();
     if input.idempotency_key.trim().is_empty() {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(HostError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "INVALID_INPUT",
+            "idempotencyKey is required",
+            false,
+        ));
     }
 
     let key = (canvas_id, input.idempotency_key.trim().to_string());
     if let Some(run_id) = store.run_idempotency.get(&key).copied() {
-        let run = store
-            .runs
-            .get(&run_id)
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let run = store.runs.get(&run_id).ok_or_else(|| {
+            HostError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "Stored run could not be found",
+                true,
+            )
+        })?;
         if run.revision != input.revision || input.entrypoint != "default" {
-            return Err(StatusCode::CONFLICT);
+            return Err(HostError::new(
+                StatusCode::CONFLICT,
+                "DUPLICATE_COMMAND",
+                "The idempotency key was already used with different run parameters",
+                false,
+            ));
         }
         return Ok(Json(run.clone()));
     }
 
-    let canvas = store
-        .canvases
-        .get_mut(&canvas_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
-    if input.entrypoint != "default"
-        || canvas.default_entrypoint_node_id.is_none()
-        || input.revision != canvas.revision
-    {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    let canvas = store.canvases.get_mut(&canvas_id).ok_or_else(|| {
+        HostError::new(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Canvas was not found",
+            false,
+        )
+    })?;
+    if input.entrypoint != "default" {
+        return Err(HostError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "INVALID_INPUT",
+            "Only the default entrypoint is supported",
+            false,
+        ));
+    }
+    if canvas.default_entrypoint_node_id.is_none() {
+        return Err(HostError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ENTRYPOINT_REQUIRED",
+            "A default entrypoint is required",
+            false,
+        ));
+    }
+    if input.revision != canvas.revision {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "REVISION_CONFLICT",
+            "The requested revision is stale",
+            false,
+        ));
+    }
+    if matches!(canvas.status, RunStatus::Running) {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "RUN_ALREADY_ACTIVE",
+            "A run is already active for this canvas",
+            true,
+        ));
     }
     canvas.status = RunStatus::Running;
     let run = Run {

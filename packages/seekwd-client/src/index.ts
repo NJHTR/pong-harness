@@ -1,4 +1,4 @@
-import type { Canvas, CanvasRevision, CreateCanvasInput, CreateWorkspaceInput, HostSnapshot, Id, Notification, Run, StartRunInput, Workspace } from "@seekwd/protocol-schema";
+import type { Canvas, CanvasRevision, CreateCanvasInput, CreateWorkspaceInput, HostError, HostSnapshot, Id, Notification, Run, StartRunInput, Workspace } from "@seekwd/protocol-schema";
 
 export interface HostClient {
   snapshot(): Promise<HostSnapshot>;
@@ -49,8 +49,15 @@ export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317"): HostCli
       headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
     });
     if (!response.ok) {
-      const message = await response.text();
-      throw new Error(message || `Host request failed (${response.status})`);
+      const body = await response.text();
+      let error: Partial<HostError> = {};
+      try { error = JSON.parse(body) as HostError; } catch { /* legacy/plain-text host response */ }
+      const message = error.message || body || `Host request failed (${response.status})`;
+      const failure = new Error(message) as Error & Partial<HostError>;
+      failure.name = error.code || "HOST_REQUEST_FAILED";
+      failure.code = error.code;
+      failure.retryable = error.retryable;
+      throw failure;
     }
     return response.json() as Promise<T>;
   };

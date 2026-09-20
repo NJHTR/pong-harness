@@ -13,3 +13,4 @@ export interface StartRunInput { canvasId: Id; revision: number; entrypoint: "de
 export interface SetDefaultEntrypointInput { canvasId: Id; nodeId: Id; }
 
 export interface HostSnapshot { workspaces: Workspace[]; canvases: Canvas[]; revisions: CanvasRevision[]; runs: Run[]; notifications: Notification[]; }
+export interface HostError { code: string; message: string; retryable: boolean; }
