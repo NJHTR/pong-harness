@@ -110,16 +110,7 @@ struct Snapshot {
 }
 
 fn now() -> String {
-    chrono_like_now()
-}
-fn chrono_like_now() -> String {
-    format!(
-        "{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    )
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspace>> {
