@@ -55,6 +55,59 @@ importers:
         specifier: ^7.1.5
         version: 7.3.6
 
+  apps/workbench:
+    dependencies:
+      '@seekwd/client':
+        specifier: workspace:*
+        version: link:../../packages/seekwd-client
+      '@seekwd/protocol-schema':
+        specifier: workspace:*
+        version: link:../../packages/protocol-schema
+      '@seekwd/ui':
+        specifier: workspace:*
+        version: link:../../packages/seekwd-ui
+      lucide-react:
+        specifier: ^0.544.0
+        version: 0.544.0(react@19.3.0)
+      react:
+        specifier: ^19.1.1
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.3.0(react@19.3.0)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.12
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.1.9
+        version: 19.3.0(@types/react@19.3.0)
+      '@vitejs/plugin-react':
+        specifier: ^5.0.2
+        version: 5.2.0(vite@7.3.6)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.5
+        version: 7.3.6
+
+  packages/protocol-schema:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
+  packages/seekwd-client:
+    dependencies:
+      '@seekwd/protocol-schema':
+        specifier: workspace:*
+        version: link:../protocol-schema
+    devDependencies:
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
   packages/seekwd-ui:
     dependencies:
       lucide-react:
