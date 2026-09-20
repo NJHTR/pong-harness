@@ -4,8 +4,8 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use pong_core::{Canvas, Run, RunStatus, Workspace};
-use serde::Deserialize;
+use pong_core::{Canvas, CanvasRevision, Notification, Run, RunStatus, Workspace};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -22,19 +22,33 @@ struct AppState {
 struct Store {
     workspaces: HashMap<Uuid, Workspace>,
     canvases: HashMap<Uuid, Canvas>,
+    revisions: HashMap<Uuid, CanvasRevision>,
     runs: HashMap<Uuid, Run>,
+    notifications: HashMap<Uuid, Notification>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateWorkspace {
     name: String,
     path: String,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateCanvas {
     workspace_id: Uuid,
     name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Snapshot {
+    workspaces: Vec<Workspace>,
+    canvases: Vec<Canvas>,
+    revisions: Vec<CanvasRevision>,
+    runs: Vec<Run>,
+    notifications: Vec<Notification>,
 }
 
 fn now() -> String {
@@ -61,6 +75,25 @@ async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspace>> 
             .cloned()
             .collect(),
     )
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "pong-host",
+        "protocolVersion": "0.1.0"
+    }))
+}
+
+async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
+    let store = state.inner.lock().unwrap();
+    Json(Snapshot {
+        workspaces: store.workspaces.values().cloned().collect(),
+        canvases: store.canvases.values().cloned().collect(),
+        revisions: store.revisions.values().cloned().collect(),
+        runs: store.runs.values().cloned().collect(),
+        notifications: store.notifications.values().cloned().collect(),
+    })
 }
 
 async fn create_workspace(
@@ -121,6 +154,43 @@ async fn create_canvas(
     (StatusCode::CREATED, Json(item))
 }
 
+async fn save_revision(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<Uuid>,
+) -> Result<(StatusCode, Json<CanvasRevision>), StatusCode> {
+    let mut store = state.inner.lock().unwrap();
+    let canvas = store
+        .canvases
+        .get_mut(&canvas_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    canvas.revision += 1;
+    canvas.updated_at = now();
+    let revision = CanvasRevision {
+        id: Uuid::new_v4(),
+        canvas_id,
+        revision: canvas.revision,
+        created_at: now(),
+        created_by: "user".to_string(),
+        status: "debug".to_string(),
+    };
+    store.revisions.insert(revision.id, revision.clone());
+    Ok((StatusCode::CREATED, Json(revision)))
+}
+
+async fn list_runs(State(state): State<AppState>, Path(canvas_id): Path<Uuid>) -> Json<Vec<Run>> {
+    Json(
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .runs
+            .values()
+            .filter(|run| run.canvas_id == canvas_id)
+            .cloned()
+            .collect(),
+    )
+}
+
 async fn start_run(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
@@ -143,6 +213,38 @@ async fn start_run(
         finished_at: None,
     };
     store.runs.insert(run.id, run.clone());
+    let state_for_completion = state.clone();
+    let run_id = run.id;
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+        let mut store = state_for_completion.inner.lock().unwrap();
+        let (canvas_id, completed_run_id) = {
+            let Some(run) = store.runs.get_mut(&run_id) else {
+                return;
+            };
+            if !matches!(run.status, RunStatus::Running) {
+                return;
+            }
+            let canvas_id = run.canvas_id;
+            run.status = RunStatus::Succeeded;
+            run.finished_at = Some(now());
+            (canvas_id, run.id)
+        };
+        let Some(canvas) = store.canvases.get_mut(&canvas_id) else {
+            return;
+        };
+        canvas.status = RunStatus::Succeeded;
+        let notification = Notification {
+            id: Uuid::new_v4(),
+            title: "Run completed".to_string(),
+            message: format!("{} completed successfully.", canvas.name),
+            severity: "success".to_string(),
+            created_at: now(),
+            run_id: Some(completed_run_id),
+            canvas_id: Some(canvas.id),
+        };
+        store.notifications.insert(notification.id, notification);
+    });
     Ok(Json(run))
 }
 
@@ -150,6 +252,8 @@ async fn start_run(
 async fn main() {
     let state = AppState::default();
     let app = Router::new()
+        .route("/api/health", get(health))
+        .route("/api/snapshot", get(snapshot))
         .route(
             "/api/workspaces",
             get(list_workspaces).post(create_workspace),
@@ -158,7 +262,11 @@ async fn main() {
             "/api/workspaces/:workspace_id/canvases",
             get(list_canvases).post(create_canvas),
         )
-        .route("/api/canvases/:canvas_id/runs", post(start_run))
+        .route("/api/canvases/:canvas_id/revisions", post(save_revision))
+        .route(
+            "/api/canvases/:canvas_id/runs",
+            get(list_runs).post(start_run),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:4317")

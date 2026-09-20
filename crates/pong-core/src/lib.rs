@@ -4,6 +4,7 @@ use uuid::Uuid;
 pub type Id = Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Workspace {
     pub id: Id,
     pub name: String,
@@ -12,6 +13,7 @@ pub struct Workspace {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Canvas {
     pub id: Id,
     pub workspace_id: Id,
@@ -33,6 +35,7 @@ pub enum RunStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Run {
     pub id: Id,
     pub canvas_id: Id,
@@ -40,4 +43,27 @@ pub struct Run {
     pub status: RunStatus,
     pub started_at: String,
     pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasRevision {
+    pub id: Id,
+    pub canvas_id: Id,
+    pub revision: u64,
+    pub created_at: String,
+    pub created_by: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notification {
+    pub id: Id,
+    pub title: String,
+    pub message: String,
+    pub severity: String,
+    pub created_at: String,
+    pub run_id: Option<Id>,
+    pub canvas_id: Option<Id>,
 }
