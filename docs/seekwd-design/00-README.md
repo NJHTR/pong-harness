@@ -51,6 +51,11 @@
 | [26-ui-system](26-ui-system/00-README.md) | macOS 风格、设计令牌、组件边界与工作台交互基线 |
 | [27-normative-contracts](27-normative-contracts/00-README.md) | 正式合同状态、版本、入口、状态机、GraphPatch、恢复、权限与治理 |
 | [28-design-review](28-design-review/00-review-report.md) | 基础合同、实现缺口、UI 覆盖、交互闭环和开放边界审查报告 |
+| [29-system-product-requirements.md](29-system-product-requirements.md) | 全系统产品需求、领域对象 CRUD、页面、权限、异常路径和端到端验收 |
+| [30-delivery-roadmap-and-progress-matrix.md](30-delivery-roadmap-and-progress-matrix.md) | 按模块、任务、完成度、周期、负责人、依赖和阶段出口拆分的交付矩阵 |
+| [31-system-decomposition-and-process-model.md](31-system-decomposition-and-process-model.md) | 系统平面、业务域、模块职责、业务/操作/数据流程、状态转换和失败恢复模型 |
+| [32-backend-and-middleware-selection.md](32-backend-and-middleware-selection.md) | 后端语言、Host、存储、IPC、事件、调度、执行隔离、安全中间件和分阶段演进选型 |
+| [33-distribution-and-user-operation-model.md](33-distribution-and-user-operation-model.md) | 桌面安装包、签名、更新、回滚、云端可选服务、用户模式和团队使用方式 |
 
 ## 当前一句话定义
 

@@ -4,6 +4,10 @@
 
 本目录定义 Seekwd 桌面工作台的视觉语言、组件边界和交互基线。它服务于复杂、长期运行的专业工具，不模拟完整 macOS 桌面。
 
+专题产品需求：
+
+- [Notification & Attention Center PRD](03-notification-attention-center-prd.md)：通知队列、展示时长、持久消息中心、待处理事项、系统通知、数据合同与验收标准。
+
 ## 目标
 
 - 保留 WebSwift 中紧凑、清晰、接近原生桌面控件的比例与质感。
