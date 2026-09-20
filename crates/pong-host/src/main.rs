@@ -25,6 +25,7 @@ struct Store {
     revisions: HashMap<Uuid, CanvasRevision>,
     runs: HashMap<Uuid, Run>,
     notifications: HashMap<Uuid, Notification>,
+    run_idempotency: HashMap<(Uuid, String), Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +51,14 @@ struct RenameInput {
 #[serde(rename_all = "camelCase")]
 struct EntrypointInput {
     node_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartRunInput {
+    revision: u64,
+    entrypoint: String,
+    idempotency_key: String,
 }
 
 #[derive(Serialize)]
@@ -258,13 +267,33 @@ async fn list_runs(State(state): State<AppState>, Path(canvas_id): Path<Uuid>) -
 async fn start_run(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
+    Json(input): Json<StartRunInput>,
 ) -> Result<Json<Run>, StatusCode> {
     let mut store = state.inner.lock().unwrap();
+    if input.idempotency_key.trim().is_empty() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    let key = (canvas_id, input.idempotency_key.trim().to_string());
+    if let Some(run_id) = store.run_idempotency.get(&key).copied() {
+        let run = store
+            .runs
+            .get(&run_id)
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        if run.revision != input.revision || input.entrypoint != "default" {
+            return Err(StatusCode::CONFLICT);
+        }
+        return Ok(Json(run.clone()));
+    }
+
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
         .ok_or(StatusCode::NOT_FOUND)?;
-    if canvas.default_entrypoint_node_id.is_none() {
+    if input.entrypoint != "default"
+        || canvas.default_entrypoint_node_id.is_none()
+        || input.revision != canvas.revision
+    {
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
     canvas.status = RunStatus::Running;
@@ -277,6 +306,7 @@ async fn start_run(
         finished_at: None,
     };
     store.runs.insert(run.id, run.clone());
+    store.run_idempotency.insert(key, run.id);
     let state_for_completion = state.clone();
     let run_id = run.id;
     tokio::spawn(async move {
