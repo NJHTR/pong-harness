@@ -19,16 +19,16 @@ const seed = (): HostSnapshot => {
   const workspace: Workspace = { id: "ws_thesis", name: "Thesis Workspace", path: "D:/Documents/Thesis", updatedAt: now() };
   const canvas: Canvas = { id: "canvas_citation", workspaceId: workspace.id, name: "Citation Review", status: "idle", defaultEntrypointNodeId: "node_start", revision: 3, updatedAt: now() };
   const node: CanvasNode = { id: "node_start", canvasId: canvas.id, name: "Start", kind: "trigger.start" };
-  return { workspaces: [workspace], canvases: [canvas], nodes: [node], revisions: [{ id: "rev_citation_3", canvasId: canvas.id, revision: 3, createdAt: now(), createdBy: "user", status: "validated" }], runs: [], notifications: [] };
+  return { snapshotVersion: 1, workspaces: [workspace], canvases: [canvas], nodes: [node], revisions: [{ id: "rev_citation_3", canvasId: canvas.id, revision: 3, createdAt: now(), createdBy: "user", status: "validated" }], runs: [], notifications: [] };
 };
 
 export function createLocalHostClient(): HostClient {
   const stored = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<HostSnapshot> | null;
   let state: HostSnapshot = stored
-    ? { workspaces: stored.workspaces ?? [], canvases: stored.canvases ?? [], nodes: stored.nodes ?? [], revisions: stored.revisions ?? [], runs: stored.runs ?? [], notifications: stored.notifications ?? [] }
+    ? { snapshotVersion: stored.snapshotVersion ?? 1, workspaces: stored.workspaces ?? [], canvases: stored.canvases ?? [], nodes: stored.nodes ?? [], revisions: stored.revisions ?? [], runs: stored.runs ?? [], notifications: stored.notifications ?? [] }
     : seed();
   const listeners = new Set<(snapshot: HostSnapshot) => void>();
-  const commit = () => { localStorage.setItem(key, JSON.stringify(state)); listeners.forEach((listener) => listener(structuredClone(state))); };
+  const commit = () => { state.snapshotVersion += 1; localStorage.setItem(key, JSON.stringify(state)); listeners.forEach((listener) => listener(structuredClone(state))); };
   const workspace = (id: Id) => state.workspaces.find((item) => item.id === id);
   const canvas = (id: Id) => state.canvases.find((item) => item.id === id);
   const client: HostClient = {
@@ -76,13 +76,12 @@ export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317"): HostCli
     startRun: (input) => request<Run>(`/api/canvases/${input.canvasId}/runs`, { method: "POST", body: JSON.stringify(input) }),
     subscribe(listener) {
       let active = true;
-      let previous = "";
+      let previousVersion = -1;
       const poll = async () => {
         try {
           const next = await client.snapshot();
-          const serialized = JSON.stringify(next);
-          if (active && serialized !== previous) {
-            previous = serialized;
+          if (active && next.snapshotVersion !== previousVersion) {
+            previousVersion = next.snapshotVersion;
             listener(next);
           }
         } catch {

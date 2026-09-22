@@ -11,7 +11,7 @@ const client = import.meta.env.VITE_HOST_URL
   : createLocalHostClient();
 
 function App() {
-  const [snapshot, setSnapshot] = useState<HostSnapshot>({ workspaces: [], canvases: [], nodes: [], revisions: [], runs: [], notifications: [] });
+  const [snapshot, setSnapshot] = useState<HostSnapshot>({ snapshotVersion: 0, workspaces: [], canvases: [], nodes: [], revisions: [], runs: [], notifications: [] });
   const [workspaceId, setWorkspaceId] = useState<string>();
   const [canvasId, setCanvasId] = useState<string>();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});

@@ -21,6 +21,7 @@ use uuid::Uuid;
 struct AppState {
     inner: Arc<Mutex<Store>>,
     db: Arc<Mutex<Connection>>,
+    snapshot_version: Arc<Mutex<u64>>,
 }
 
 #[derive(Default)]
@@ -107,6 +108,8 @@ impl IntoResponse for HostError {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
+    #[serde(default)]
+    snapshot_version: u64,
     workspaces: Vec<Workspace>,
     canvases: Vec<Canvas>,
     nodes: Vec<CanvasNode>,
@@ -156,6 +159,7 @@ impl From<Snapshot> for Store {
 impl From<&Store> for Snapshot {
     fn from(store: &Store) -> Self {
         Self {
+            snapshot_version: 0,
             workspaces: store.workspaces.values().cloned().collect(),
             canvases: store.canvases.values().cloned().collect(),
             nodes: store.nodes.values().cloned().collect(),
@@ -168,7 +172,11 @@ impl From<&Store> for Snapshot {
 
 impl AppState {
     fn persist(&self, store: &Store) -> rusqlite::Result<()> {
-        let snapshot = serde_json::to_string(&Snapshot::from(store))
+        let mut snapshot = Snapshot::from(store);
+        let mut version = self.snapshot_version.lock().unwrap();
+        *version = version.saturating_add(1);
+        snapshot.snapshot_version = *version;
+        let snapshot = serde_json::to_string(&snapshot)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let connection = self.db.lock().unwrap();
         let transaction = connection.unchecked_transaction()?;
@@ -190,7 +198,7 @@ impl AppState {
     }
 }
 
-fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store)> {
+fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store, u64)> {
     let connection = Connection::open(path)?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS host_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot_json TEXT NOT NULL);
@@ -203,16 +211,19 @@ fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store)> {
            PRIMARY KEY (canvas_id, idempotency_key)
          );",
     )?;
-    let mut store = connection
+    let loaded_snapshot = connection
         .query_row(
             "SELECT snapshot_json FROM host_state WHERE id = 1",
             [],
             |row| row.get::<_, String>(0),
         )
         .ok()
-        .and_then(|json| serde_json::from_str::<Snapshot>(&json).ok())
-        .map(Store::from)
+        .and_then(|json| serde_json::from_str::<Snapshot>(&json).ok());
+    let snapshot_version = loaded_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.snapshot_version)
         .unwrap_or_default();
+    let mut store = loaded_snapshot.map(Store::from).unwrap_or_default();
     let mut statement =
         connection.prepare("SELECT canvas_id, idempotency_key, run_id FROM command_journal")?;
     let rows = statement.query_map([], |row| {
@@ -228,7 +239,7 @@ fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store)> {
         }
     }
     drop(statement);
-    Ok((connection, store))
+    Ok((connection, store, snapshot_version))
 }
 
 fn now() -> String {
@@ -258,7 +269,10 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
     let store = state.inner.lock().unwrap();
-    Json(Snapshot::from(&*store))
+    let version = *state.snapshot_version.lock().unwrap();
+    let mut snapshot = Snapshot::from(&*store);
+    snapshot.snapshot_version = version;
+    Json(snapshot)
 }
 
 async fn create_workspace(
@@ -555,10 +569,12 @@ async fn main() {
     let database_path = env::var_os("PONG_HOST_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("pong-host.sqlite3"));
-    let (connection, store) = open_database(database_path).expect("open pong-host database");
+    let (connection, store, snapshot_version) =
+        open_database(database_path).expect("open pong-host database");
     let state = AppState {
         inner: Arc::new(Mutex::new(store)),
         db: Arc::new(Mutex::new(connection)),
+        snapshot_version: Arc::new(Mutex::new(snapshot_version)),
     };
     let app = Router::new()
         .route("/api/health", get(health))

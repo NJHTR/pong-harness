@@ -13,5 +13,5 @@ export interface CreateCanvasInput { workspaceId: Id; name: string; }
 export interface StartRunInput { canvasId: Id; revision: number; entrypoint: "default"; idempotencyKey: string; }
 export interface SetDefaultEntrypointInput { canvasId: Id; nodeId: Id; }
 
-export interface HostSnapshot { workspaces: Workspace[]; canvases: Canvas[]; nodes: CanvasNode[]; revisions: CanvasRevision[]; runs: Run[]; notifications: Notification[]; }
+export interface HostSnapshot { snapshotVersion: number; workspaces: Workspace[]; canvases: Canvas[]; nodes: CanvasNode[]; revisions: CanvasRevision[]; runs: Run[]; notifications: Notification[]; }
 export interface HostError { code: string; message: string; retryable: boolean; }
