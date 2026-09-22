@@ -14,4 +14,6 @@ export interface StartRunInput { canvasId: Id; revision: number; entrypoint: "de
 export interface SetDefaultEntrypointInput { canvasId: Id; nodeId: Id; }
 
 export interface HostSnapshot { snapshotVersion: number; workspaces: Workspace[]; canvases: Canvas[]; nodes: CanvasNode[]; revisions: CanvasRevision[]; runs: Run[]; notifications: Notification[]; }
+export interface HostEvent { eventId: Id; eventType: "projection.snapshot.updated"; globalPosition: number; snapshotVersion: number; occurredAt: string; }
+export interface HostEventBatch { events: HostEvent[]; nextGlobalPosition: number; snapshotVersion: number; }
 export interface HostError { code: string; message: string; retryable: boolean; }

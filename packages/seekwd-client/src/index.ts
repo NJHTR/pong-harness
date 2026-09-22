@@ -1,4 +1,4 @@
-import type { Canvas, CanvasNode, CanvasRevision, CreateCanvasInput, CreateWorkspaceInput, HostError, HostSnapshot, Id, Notification, Run, StartRunInput, Workspace } from "@seekwd/protocol-schema";
+import type { Canvas, CanvasNode, CanvasRevision, CreateCanvasInput, CreateWorkspaceInput, HostError, HostEventBatch, HostSnapshot, Id, Notification, Run, StartRunInput, Workspace } from "@seekwd/protocol-schema";
 
 export interface HostClient {
   snapshot(): Promise<HostSnapshot>;
@@ -9,6 +9,7 @@ export interface HostClient {
   setDefaultEntrypoint(canvasId: Id, nodeId: Id): Promise<Canvas>;
   saveRevision(canvasId: Id): Promise<CanvasRevision>;
   startRun(input: StartRunInput): Promise<Run>;
+  events(afterGlobalPosition: number, limit?: number): Promise<HostEventBatch>;
   subscribe(listener: (snapshot: HostSnapshot) => void): () => void;
 }
 
@@ -28,7 +29,8 @@ export function createLocalHostClient(): HostClient {
     ? { snapshotVersion: stored.snapshotVersion ?? 1, workspaces: stored.workspaces ?? [], canvases: stored.canvases ?? [], nodes: stored.nodes ?? [], revisions: stored.revisions ?? [], runs: stored.runs ?? [], notifications: stored.notifications ?? [] }
     : seed();
   const listeners = new Set<(snapshot: HostSnapshot) => void>();
-  const commit = () => { state.snapshotVersion += 1; localStorage.setItem(key, JSON.stringify(state)); listeners.forEach((listener) => listener(structuredClone(state))); };
+  let localGlobalPosition = 0;
+  const commit = () => { state.snapshotVersion += 1; localGlobalPosition += 1; localStorage.setItem(key, JSON.stringify(state)); listeners.forEach((listener) => listener(structuredClone(state))); };
   const workspace = (id: Id) => state.workspaces.find((item) => item.id === id);
   const canvas = (id: Id) => state.canvases.find((item) => item.id === id);
   const client: HostClient = {
@@ -40,6 +42,7 @@ export function createLocalHostClient(): HostClient {
     async setDefaultEntrypoint(canvasId, nodeId) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); if (!state.nodes.some((node) => node.id === nodeId && node.canvasId === canvasId)) throw new Error("Entrypoint node not found"); item.defaultEntrypointNodeId = nodeId; item.updatedAt = now(); commit(); return structuredClone(item); },
     async saveRevision(canvasId) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); item.revision += 1; item.updatedAt = now(); const revision: CanvasRevision = { id: uid("revision"), canvasId, revision: item.revision, createdAt: now(), createdBy: "user", status: "debug" }; state.revisions.push(revision); commit(); return structuredClone(revision); },
     async startRun(input) { const item = canvas(input.canvasId); if (!item) throw new Error("Canvas not found"); if (!item.defaultEntrypointNodeId) throw new Error("A default entrypoint is required"); if (input.revision !== item.revision) throw new Error("Revision is stale"); const run: Run = { id: uid("run"), canvasId: item.id, revision: input.revision, status: "running", startedAt: now() }; item.status = "running"; state.runs.unshift(run); commit(); window.setTimeout(() => { const current = state.runs.find((candidate) => candidate.id === run.id); const currentCanvas = canvas(item.id); if (!current || !currentCanvas || current.status !== "running") return; current.status = "succeeded"; current.finishedAt = now(); currentCanvas.status = "succeeded"; const notification: Notification = { id: uid("notification"), title: "Run completed", message: `${currentCanvas.name} completed successfully.`, severity: "success", createdAt: now(), canvasId: currentCanvas.id, runId: current.id }; state.notifications.unshift(notification); commit(); }, 1600); return structuredClone(run); },
+    events: async (afterGlobalPosition, limit = 100) => { const next = afterGlobalPosition < localGlobalPosition ? Math.min(localGlobalPosition, afterGlobalPosition + Math.max(1, limit)) : afterGlobalPosition; return { events: next > afterGlobalPosition ? [{ eventId: uid("event"), eventType: "projection.snapshot.updated" as const, globalPosition: next, snapshotVersion: state.snapshotVersion, occurredAt: now() }] : [], nextGlobalPosition: next, snapshotVersion: state.snapshotVersion }; },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
   };
   return client;
@@ -74,13 +77,23 @@ export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317"): HostCli
     setDefaultEntrypoint: (canvasId, nodeId) => request<Canvas>(`/api/canvases/${canvasId}/entrypoint`, { method: "PUT", body: JSON.stringify({ nodeId }) }),
     saveRevision: (canvasId) => request<CanvasRevision>(`/api/canvases/${canvasId}/revisions`, { method: "POST" }),
     startRun: (input) => request<Run>(`/api/canvases/${input.canvasId}/runs`, { method: "POST", body: JSON.stringify(input) }),
+    events: (afterGlobalPosition, limit = 100) => request<HostEventBatch>(`/api/events?afterGlobalPosition=${afterGlobalPosition}&limit=${limit}`),
     subscribe(listener) {
       let active = true;
       let previousVersion = -1;
+      let globalPosition = 0;
       const poll = async () => {
         try {
-          const next = await client.snapshot();
-          if (active && next.snapshotVersion !== previousVersion) {
+          const batch = await client.events(globalPosition, 100);
+          if (active && batch.events.length > 0) {
+            globalPosition = batch.nextGlobalPosition;
+            const next = await client.snapshot();
+            if (next.snapshotVersion !== previousVersion) {
+              previousVersion = next.snapshotVersion;
+              listener(next);
+            }
+          } else if (active && previousVersion < 0) {
+            const next = await client.snapshot();
             previousVersion = next.snapshotVersion;
             listener(next);
           }

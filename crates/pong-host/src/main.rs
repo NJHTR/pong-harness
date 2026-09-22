@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, patch, post},
@@ -118,6 +118,37 @@ struct Snapshot {
     notifications: Vec<Notification>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostEvent {
+    event_id: Uuid,
+    event_type: &'static str,
+    global_position: u64,
+    snapshot_version: u64,
+    occurred_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventQuery {
+    #[serde(default)]
+    after_global_position: u64,
+    #[serde(default = "default_event_limit")]
+    limit: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventBatch {
+    events: Vec<HostEvent>,
+    next_global_position: u64,
+    snapshot_version: u64,
+}
+
+fn default_event_limit() -> u64 {
+    100
+}
+
 impl From<Snapshot> for Store {
     fn from(snapshot: Snapshot) -> Self {
         Self {
@@ -184,6 +215,10 @@ impl AppState {
             "INSERT INTO host_state (id, snapshot_json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET snapshot_json = excluded.snapshot_json",
             params![snapshot],
         )?;
+        transaction.execute(
+            "INSERT INTO host_events (global_position, event_id, event_type, snapshot_version, occurred_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![*version as i64, Uuid::new_v4().to_string(), "projection.snapshot.updated", *version as i64, now()],
+        )?;
         transaction.execute("DELETE FROM command_journal", [])?;
         for ((canvas_id, key), run_id) in &store.run_idempotency {
             let Some(run) = store.runs.get(run_id) else {
@@ -209,6 +244,13 @@ fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store, u64)> {
            revision INTEGER NOT NULL,
            entrypoint TEXT NOT NULL,
            PRIMARY KEY (canvas_id, idempotency_key)
+         );
+         CREATE TABLE IF NOT EXISTS host_events (
+           global_position INTEGER PRIMARY KEY,
+           event_id TEXT NOT NULL UNIQUE,
+           event_type TEXT NOT NULL,
+           snapshot_version INTEGER NOT NULL,
+           occurred_at TEXT NOT NULL
          );",
     )?;
     let loaded_snapshot = connection
@@ -273,6 +315,47 @@ async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
     let mut snapshot = Snapshot::from(&*store);
     snapshot.snapshot_version = version;
     Json(snapshot)
+}
+
+async fn events(
+    State(state): State<AppState>,
+    Query(query): Query<EventQuery>,
+) -> Json<EventBatch> {
+    let limit = query.limit.clamp(1, 500);
+    let connection = state.db.lock().unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT event_id, event_type, global_position, snapshot_version, occurred_at
+             FROM host_events WHERE global_position > ?1
+             ORDER BY global_position ASC LIMIT ?2",
+        )
+        .expect("prepare host event query");
+    let rows = statement
+        .query_map(
+            params![query.after_global_position as i64, limit as i64],
+            |row| {
+                let event_id: String = row.get(0)?;
+                Ok(HostEvent {
+                    event_id: Uuid::parse_str(&event_id).unwrap_or_else(|_| Uuid::nil()),
+                    event_type: "projection.snapshot.updated",
+                    global_position: row.get::<_, i64>(2)? as u64,
+                    snapshot_version: row.get::<_, i64>(3)? as u64,
+                    occurred_at: row.get(4)?,
+                })
+            },
+        )
+        .expect("read host events");
+    let events: Vec<HostEvent> = rows.flatten().collect();
+    let next_global_position = events
+        .last()
+        .map(|event| event.global_position)
+        .unwrap_or(query.after_global_position);
+    let snapshot_version = *state.snapshot_version.lock().unwrap();
+    Json(EventBatch {
+        events,
+        next_global_position,
+        snapshot_version,
+    })
 }
 
 async fn create_workspace(
@@ -579,6 +662,7 @@ async fn main() {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
+        .route("/api/events", get(events))
         .route(
             "/api/workspaces",
             get(list_workspaces).post(create_workspace),
