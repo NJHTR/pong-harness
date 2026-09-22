@@ -6,17 +6,21 @@ use axum::{
     routing::{get, patch, post},
 };
 use pong_core::{Canvas, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    env,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AppState {
     inner: Arc<Mutex<Store>>,
+    db: Arc<Mutex<Connection>>,
 }
 
 #[derive(Default)]
@@ -100,7 +104,7 @@ impl IntoResponse for HostError {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
     workspaces: Vec<Workspace>,
@@ -109,6 +113,122 @@ struct Snapshot {
     revisions: Vec<CanvasRevision>,
     runs: Vec<Run>,
     notifications: Vec<Notification>,
+}
+
+impl From<Snapshot> for Store {
+    fn from(snapshot: Snapshot) -> Self {
+        Self {
+            workspaces: snapshot
+                .workspaces
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
+            canvases: snapshot
+                .canvases
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
+            nodes: snapshot
+                .nodes
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
+            revisions: snapshot
+                .revisions
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
+            runs: snapshot
+                .runs
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
+            notifications: snapshot
+                .notifications
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
+            run_idempotency: HashMap::new(),
+        }
+    }
+}
+
+impl From<&Store> for Snapshot {
+    fn from(store: &Store) -> Self {
+        Self {
+            workspaces: store.workspaces.values().cloned().collect(),
+            canvases: store.canvases.values().cloned().collect(),
+            nodes: store.nodes.values().cloned().collect(),
+            revisions: store.revisions.values().cloned().collect(),
+            runs: store.runs.values().cloned().collect(),
+            notifications: store.notifications.values().cloned().collect(),
+        }
+    }
+}
+
+impl AppState {
+    fn persist(&self, store: &Store) -> rusqlite::Result<()> {
+        let snapshot = serde_json::to_string(&Snapshot::from(store))
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let connection = self.db.lock().unwrap();
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute(
+            "INSERT INTO host_state (id, snapshot_json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET snapshot_json = excluded.snapshot_json",
+            params![snapshot],
+        )?;
+        transaction.execute("DELETE FROM command_journal", [])?;
+        for ((canvas_id, key), run_id) in &store.run_idempotency {
+            let Some(run) = store.runs.get(run_id) else {
+                continue;
+            };
+            transaction.execute(
+                "INSERT INTO command_journal (canvas_id, idempotency_key, run_id, revision, entrypoint) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![canvas_id.to_string(), key, run_id.to_string(), run.revision as i64, "default"],
+            )?;
+        }
+        transaction.commit()
+    }
+}
+
+fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store)> {
+    let connection = Connection::open(path)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS host_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot_json TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS command_journal (
+           canvas_id TEXT NOT NULL,
+           idempotency_key TEXT NOT NULL,
+           run_id TEXT NOT NULL,
+           revision INTEGER NOT NULL,
+           entrypoint TEXT NOT NULL,
+           PRIMARY KEY (canvas_id, idempotency_key)
+         );",
+    )?;
+    let mut store = connection
+        .query_row(
+            "SELECT snapshot_json FROM host_state WHERE id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|json| serde_json::from_str::<Snapshot>(&json).ok())
+        .map(Store::from)
+        .unwrap_or_default();
+    let mut statement =
+        connection.prepare("SELECT canvas_id, idempotency_key, run_id FROM command_journal")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for row in rows.flatten() {
+        if let (Ok(canvas_id), Ok(run_id)) = (Uuid::parse_str(&row.0), Uuid::parse_str(&row.2)) {
+            store.run_idempotency.insert((canvas_id, row.1), run_id);
+        }
+    }
+    drop(statement);
+    Ok((connection, store))
 }
 
 fn now() -> String {
@@ -138,14 +258,7 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
     let store = state.inner.lock().unwrap();
-    Json(Snapshot {
-        workspaces: store.workspaces.values().cloned().collect(),
-        canvases: store.canvases.values().cloned().collect(),
-        nodes: store.nodes.values().cloned().collect(),
-        revisions: store.revisions.values().cloned().collect(),
-        runs: store.runs.values().cloned().collect(),
-        notifications: store.notifications.values().cloned().collect(),
-    })
+    Json(Snapshot::from(&*store))
 }
 
 async fn create_workspace(
@@ -158,12 +271,9 @@ async fn create_workspace(
         path: input.path,
         updated_at: now(),
     };
-    state
-        .inner
-        .lock()
-        .unwrap()
-        .workspaces
-        .insert(item.id, item.clone());
+    let mut store = state.inner.lock().unwrap();
+    store.workspaces.insert(item.id, item.clone());
+    let _ = state.persist(&store);
     (StatusCode::CREATED, Json(item))
 }
 
@@ -183,7 +293,9 @@ async fn rename_workspace(
     }
     workspace.name = name.to_string();
     workspace.updated_at = now();
-    Ok(Json(workspace.clone()))
+    let result = workspace.clone();
+    let _ = state.persist(&store);
+    Ok(Json(result))
 }
 
 async fn list_canvases(
@@ -224,18 +336,10 @@ async fn create_canvas(
     };
     let mut item = item;
     item.default_entrypoint_node_id = Some(start_node.id);
-    state
-        .inner
-        .lock()
-        .unwrap()
-        .canvases
-        .insert(item.id, item.clone());
-    state
-        .inner
-        .lock()
-        .unwrap()
-        .nodes
-        .insert(start_node.id, start_node);
+    let mut store = state.inner.lock().unwrap();
+    store.canvases.insert(item.id, item.clone());
+    store.nodes.insert(start_node.id, start_node);
+    let _ = state.persist(&store);
     (StatusCode::CREATED, Json(item))
 }
 
@@ -255,7 +359,9 @@ async fn rename_canvas(
     }
     canvas.name = name.to_string();
     canvas.updated_at = now();
-    Ok(Json(canvas.clone()))
+    let result = canvas.clone();
+    let _ = state.persist(&store);
+    Ok(Json(result))
 }
 
 async fn set_default_entrypoint(
@@ -277,7 +383,9 @@ async fn set_default_entrypoint(
     }
     canvas.default_entrypoint_node_id = Some(input.node_id);
     canvas.updated_at = now();
-    Ok(Json(canvas.clone()))
+    let result = canvas.clone();
+    let _ = state.persist(&store);
+    Ok(Json(result))
 }
 
 async fn save_revision(
@@ -300,6 +408,7 @@ async fn save_revision(
         status: "debug".to_string(),
     };
     store.revisions.insert(revision.id, revision.clone());
+    let _ = state.persist(&store);
     Ok((StatusCode::CREATED, Json(revision)))
 }
 
@@ -404,6 +513,7 @@ async fn start_run(
     };
     store.runs.insert(run.id, run.clone());
     store.run_idempotency.insert(key, run.id);
+    let _ = state.persist(&store);
     let state_for_completion = state.clone();
     let run_id = run.id;
     tokio::spawn(async move {
@@ -435,13 +545,21 @@ async fn start_run(
             canvas_id: Some(canvas.id),
         };
         store.notifications.insert(notification.id, notification);
+        let _ = state_for_completion.persist(&store);
     });
     Ok(Json(run))
 }
 
 #[tokio::main]
 async fn main() {
-    let state = AppState::default();
+    let database_path = env::var_os("PONG_HOST_DB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("pong-host.sqlite3"));
+    let (connection, store) = open_database(database_path).expect("open pong-host database");
+    let state = AppState {
+        inner: Arc::new(Mutex::new(store)),
+        db: Arc::new(Mutex::new(connection)),
+    };
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
