@@ -523,6 +523,50 @@ async fn list_runs(State(state): State<AppState>, Path(canvas_id): Path<Uuid>) -
     )
 }
 
+fn remaining_run_delay(run: &Run) -> std::time::Duration {
+    let total = chrono::Duration::milliseconds(1600);
+    let Ok(started_at) = chrono::DateTime::parse_from_rfc3339(&run.started_at) else {
+        return std::time::Duration::from_millis(1600);
+    };
+    let elapsed = chrono::Utc::now().signed_duration_since(started_at.with_timezone(&chrono::Utc));
+    let remaining = (total - elapsed).max(chrono::Duration::zero());
+    std::time::Duration::from_millis(remaining.num_milliseconds() as u64)
+}
+
+fn schedule_run_completion(state: AppState, run_id: Uuid, delay: std::time::Duration) {
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let mut store = state.inner.lock().unwrap();
+        let (canvas_id, completed_run_id) = {
+            let Some(run) = store.runs.get_mut(&run_id) else {
+                return;
+            };
+            if !matches!(run.status, RunStatus::Running) {
+                return;
+            }
+            let canvas_id = run.canvas_id;
+            run.status = RunStatus::Succeeded;
+            run.finished_at = Some(now());
+            (canvas_id, run.id)
+        };
+        let Some(canvas) = store.canvases.get_mut(&canvas_id) else {
+            return;
+        };
+        canvas.status = RunStatus::Succeeded;
+        let notification = Notification {
+            id: Uuid::new_v4(),
+            title: "Run completed".to_string(),
+            message: format!("{} completed successfully.", canvas.name),
+            severity: "success".to_string(),
+            created_at: now(),
+            run_id: Some(completed_run_id),
+            canvas_id: Some(canvas.id),
+        };
+        store.notifications.insert(notification.id, notification);
+        let _ = state.persist(&store);
+    });
+}
+
 async fn start_run(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
@@ -611,39 +655,7 @@ async fn start_run(
     store.runs.insert(run.id, run.clone());
     store.run_idempotency.insert(key, run.id);
     let _ = state.persist(&store);
-    let state_for_completion = state.clone();
-    let run_id = run.id;
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
-        let mut store = state_for_completion.inner.lock().unwrap();
-        let (canvas_id, completed_run_id) = {
-            let Some(run) = store.runs.get_mut(&run_id) else {
-                return;
-            };
-            if !matches!(run.status, RunStatus::Running) {
-                return;
-            }
-            let canvas_id = run.canvas_id;
-            run.status = RunStatus::Succeeded;
-            run.finished_at = Some(now());
-            (canvas_id, run.id)
-        };
-        let Some(canvas) = store.canvases.get_mut(&canvas_id) else {
-            return;
-        };
-        canvas.status = RunStatus::Succeeded;
-        let notification = Notification {
-            id: Uuid::new_v4(),
-            title: "Run completed".to_string(),
-            message: format!("{} completed successfully.", canvas.name),
-            severity: "success".to_string(),
-            created_at: now(),
-            run_id: Some(completed_run_id),
-            canvas_id: Some(canvas.id),
-        };
-        store.notifications.insert(notification.id, notification);
-        let _ = state_for_completion.persist(&store);
-    });
+    schedule_run_completion(state.clone(), run.id, remaining_run_delay(&run));
     Ok(Json(run))
 }
 
@@ -659,6 +671,18 @@ async fn main() {
         db: Arc::new(Mutex::new(connection)),
         snapshot_version: Arc::new(Mutex::new(snapshot_version)),
     };
+    let recovering_runs = {
+        let store = state.inner.lock().unwrap();
+        store
+            .runs
+            .values()
+            .filter(|run| matches!(run.status, RunStatus::Running))
+            .map(|run| (run.id, remaining_run_delay(run)))
+            .collect::<Vec<_>>()
+    };
+    for (run_id, delay) in recovering_runs {
+        schedule_run_completion(state.clone(), run_id, delay);
+    }
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
