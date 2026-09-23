@@ -24,7 +24,7 @@ struct AppState {
     snapshot_version: Arc<Mutex<u64>>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Store {
     workspaces: HashMap<Uuid, Workspace>,
     canvases: HashMap<Uuid, Canvas>,
@@ -92,6 +92,41 @@ impl HostError {
             },
         }
     }
+}
+
+fn persistence_error(error: rusqlite::Error) -> HostError {
+    eprintln!("pong-host persistence failure: {error}");
+    HostError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "PERSISTENCE_FAILED",
+        "The local Host could not persist the change. Retry the command.",
+        true,
+    )
+}
+
+fn not_found_error(resource: &'static str) -> HostError {
+    HostError::new(StatusCode::NOT_FOUND, "NOT_FOUND", resource, false)
+}
+
+fn invalid_input_error(message: &'static str) -> HostError {
+    HostError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "INVALID_INPUT",
+        message,
+        false,
+    )
+}
+
+fn persist_candidate(
+    state: &AppState,
+    store: &mut Store,
+    previous: Store,
+) -> Result<(), HostError> {
+    if let Err(error) = state.persist(store) {
+        *store = previous;
+        return Err(persistence_error(error));
+    }
+    Ok(())
 }
 
 impl IntoResponse for HostError {
@@ -205,8 +240,8 @@ impl AppState {
     fn persist(&self, store: &Store) -> rusqlite::Result<()> {
         let mut snapshot = Snapshot::from(store);
         let mut version = self.snapshot_version.lock().unwrap();
-        *version = version.saturating_add(1);
-        snapshot.snapshot_version = *version;
+        let next_version = version.saturating_add(1);
+        snapshot.snapshot_version = next_version;
         let snapshot = serde_json::to_string(&snapshot)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let connection = self.db.lock().unwrap();
@@ -217,7 +252,7 @@ impl AppState {
         )?;
         transaction.execute(
             "INSERT INTO host_events (global_position, event_id, event_type, snapshot_version, occurred_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![*version as i64, Uuid::new_v4().to_string(), "projection.snapshot.updated", *version as i64, now()],
+            params![next_version as i64, Uuid::new_v4().to_string(), "projection.snapshot.updated", next_version as i64, now()],
         )?;
         transaction.execute("DELETE FROM command_journal", [])?;
         for ((canvas_id, key), run_id) in &store.run_idempotency {
@@ -229,7 +264,9 @@ impl AppState {
                 params![canvas_id.to_string(), key, run_id.to_string(), run.revision as i64, "default"],
             )?;
         }
-        transaction.commit()
+        transaction.commit()?;
+        *version = next_version;
+        Ok(())
     }
 }
 
@@ -320,7 +357,7 @@ async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
 async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventQuery>,
-) -> Json<EventBatch> {
+) -> Result<Json<EventBatch>, HostError> {
     let limit = query.limit.clamp(1, 500);
     let connection = state.db.lock().unwrap();
     let mut statement = connection
@@ -329,7 +366,7 @@ async fn events(
              FROM host_events WHERE global_position > ?1
              ORDER BY global_position ASC LIMIT ?2",
         )
-        .expect("prepare host event query");
+        .map_err(persistence_error)?;
     let rows = statement
         .query_map(
             params![query.after_global_position as i64, limit as i64],
@@ -344,24 +381,26 @@ async fn events(
                 })
             },
         )
-        .expect("read host events");
-    let events: Vec<HostEvent> = rows.flatten().collect();
+        .map_err(persistence_error)?;
+    let events: Vec<HostEvent> = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(persistence_error)?;
     let next_global_position = events
         .last()
         .map(|event| event.global_position)
         .unwrap_or(query.after_global_position);
     let snapshot_version = *state.snapshot_version.lock().unwrap();
-    Json(EventBatch {
+    Ok(Json(EventBatch {
         events,
         next_global_position,
         snapshot_version,
-    })
+    }))
 }
 
 async fn create_workspace(
     State(state): State<AppState>,
     Json(input): Json<CreateWorkspace>,
-) -> (StatusCode, Json<Workspace>) {
+) -> Result<(StatusCode, Json<Workspace>), HostError> {
     let item = Workspace {
         id: Uuid::new_v4(),
         name: input.name.trim().to_string(),
@@ -369,29 +408,31 @@ async fn create_workspace(
         updated_at: now(),
     };
     let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
     store.workspaces.insert(item.id, item.clone());
-    let _ = state.persist(&store);
-    (StatusCode::CREATED, Json(item))
+    persist_candidate(&state, &mut store, previous)?;
+    Ok((StatusCode::CREATED, Json(item)))
 }
 
 async fn rename_workspace(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Json(input): Json<RenameInput>,
-) -> Result<Json<Workspace>, StatusCode> {
+) -> Result<Json<Workspace>, HostError> {
     let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
     let workspace = store
         .workspaces
         .get_mut(&workspace_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| not_found_error("Workspace was not found"))?;
     let name = input.name.trim();
     if name.is_empty() {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(invalid_input_error("Workspace name is required"));
     }
     workspace.name = name.to_string();
     workspace.updated_at = now();
     let result = workspace.clone();
-    let _ = state.persist(&store);
+    persist_candidate(&state, &mut store, previous)?;
     Ok(Json(result))
 }
 
@@ -415,7 +456,7 @@ async fn list_canvases(
 async fn create_canvas(
     State(state): State<AppState>,
     Json(input): Json<CreateCanvas>,
-) -> (StatusCode, Json<Canvas>) {
+) -> Result<(StatusCode, Json<Canvas>), HostError> {
     let item = Canvas {
         id: Uuid::new_v4(),
         workspace_id: input.workspace_id,
@@ -434,30 +475,32 @@ async fn create_canvas(
     let mut item = item;
     item.default_entrypoint_node_id = Some(start_node.id);
     let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
     store.canvases.insert(item.id, item.clone());
     store.nodes.insert(start_node.id, start_node);
-    let _ = state.persist(&store);
-    (StatusCode::CREATED, Json(item))
+    persist_candidate(&state, &mut store, previous)?;
+    Ok((StatusCode::CREATED, Json(item)))
 }
 
 async fn rename_canvas(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
     Json(input): Json<RenameInput>,
-) -> Result<Json<Canvas>, StatusCode> {
+) -> Result<Json<Canvas>, HostError> {
     let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
     let name = input.name.trim();
     if name.is_empty() {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(invalid_input_error("Canvas name is required"));
     }
     canvas.name = name.to_string();
     canvas.updated_at = now();
     let result = canvas.clone();
-    let _ = state.persist(&store);
+    persist_candidate(&state, &mut store, previous)?;
     Ok(Json(result))
 }
 
@@ -465,8 +508,9 @@ async fn set_default_entrypoint(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
     Json(input): Json<EntrypointInput>,
-) -> Result<Json<Canvas>, StatusCode> {
+) -> Result<Json<Canvas>, HostError> {
     let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
     let node_belongs_to_canvas = store
         .nodes
         .get(&input.node_id)
@@ -474,26 +518,29 @@ async fn set_default_entrypoint(
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
     if !node_belongs_to_canvas {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(invalid_input_error(
+            "The entrypoint node does not belong to this canvas",
+        ));
     }
     canvas.default_entrypoint_node_id = Some(input.node_id);
     canvas.updated_at = now();
     let result = canvas.clone();
-    let _ = state.persist(&store);
+    persist_candidate(&state, &mut store, previous)?;
     Ok(Json(result))
 }
 
 async fn save_revision(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
-) -> Result<(StatusCode, Json<CanvasRevision>), StatusCode> {
+) -> Result<(StatusCode, Json<CanvasRevision>), HostError> {
     let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
     canvas.revision += 1;
     canvas.updated_at = now();
     let revision = CanvasRevision {
@@ -505,7 +552,7 @@ async fn save_revision(
         status: "debug".to_string(),
     };
     store.revisions.insert(revision.id, revision.clone());
-    let _ = state.persist(&store);
+    persist_candidate(&state, &mut store, previous)?;
     Ok((StatusCode::CREATED, Json(revision)))
 }
 
@@ -537,6 +584,7 @@ fn schedule_run_completion(state: AppState, run_id: Uuid, delay: std::time::Dura
     tokio::spawn(async move {
         tokio::time::sleep(delay).await;
         let mut store = state.inner.lock().unwrap();
+        let previous = store.clone();
         let (canvas_id, completed_run_id) = {
             let Some(run) = store.runs.get_mut(&run_id) else {
                 return;
@@ -550,6 +598,7 @@ fn schedule_run_completion(state: AppState, run_id: Uuid, delay: std::time::Dura
             (canvas_id, run.id)
         };
         let Some(canvas) = store.canvases.get_mut(&canvas_id) else {
+            *store = previous;
             return;
         };
         canvas.status = RunStatus::Succeeded;
@@ -563,7 +612,12 @@ fn schedule_run_completion(state: AppState, run_id: Uuid, delay: std::time::Dura
             canvas_id: Some(canvas.id),
         };
         store.notifications.insert(notification.id, notification);
-        let _ = state.persist(&store);
+        if let Err(error) = state.persist(&store) {
+            eprintln!("run completion persistence failed: {error}");
+            *store = previous;
+            drop(store);
+            schedule_run_completion(state, run_id, std::time::Duration::from_millis(500));
+        }
     });
 }
 
@@ -603,14 +657,11 @@ async fn start_run(
         return Ok(Json(run.clone()));
     }
 
-    let canvas = store.canvases.get_mut(&canvas_id).ok_or_else(|| {
-        HostError::new(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            "Canvas was not found",
-            false,
-        )
-    })?;
+    let previous = store.clone();
+    let canvas = store
+        .canvases
+        .get_mut(&canvas_id)
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
     if input.entrypoint != "default" {
         return Err(HostError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -654,7 +705,7 @@ async fn start_run(
     };
     store.runs.insert(run.id, run.clone());
     store.run_idempotency.insert(key, run.id);
-    let _ = state.persist(&store);
+    persist_candidate(&state, &mut store, previous)?;
     schedule_run_completion(state.clone(), run.id, remaining_run_delay(&run));
     Ok(Json(run))
 }
@@ -713,4 +764,49 @@ async fn main() {
         .expect("bind host");
     println!("pong-host listening on http://127.0.0.1:4317");
     axum::serve(listener, app).await.expect("serve host");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(connection: Connection) -> AppState {
+        AppState {
+            inner: Arc::new(Mutex::new(Store::default())),
+            db: Arc::new(Mutex::new(connection)),
+            snapshot_version: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    #[test]
+    fn failed_persist_does_not_advance_snapshot_version() {
+        let state = test_state(Connection::open_in_memory().unwrap());
+
+        let result = state.persist(&Store::default());
+
+        assert!(result.is_err());
+        assert_eq!(*state.snapshot_version.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn failed_candidate_persist_restores_store() {
+        let state = test_state(Connection::open_in_memory().unwrap());
+        let mut store = Store::default();
+        let workspace = Workspace {
+            id: Uuid::new_v4(),
+            name: "before".to_string(),
+            path: "D:/workspace".to_string(),
+            updated_at: now(),
+        };
+        store.workspaces.insert(workspace.id, workspace.clone());
+        let previous = store.clone();
+        store.workspaces.get_mut(&workspace.id).unwrap().name = "after".to_string();
+
+        let error = persist_candidate(&state, &mut store, previous.clone()).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.body.code, "PERSISTENCE_FAILED");
+        assert_eq!(store.workspaces.get(&workspace.id).unwrap().name, "before");
+        assert_eq!(*state.snapshot_version.lock().unwrap(), 0);
+    }
 }
