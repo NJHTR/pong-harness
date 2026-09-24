@@ -1,7 +1,8 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderValue, Method, Request, StatusCode, Uri, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
@@ -14,8 +15,100 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use subtle::ConstantTimeEq;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
+
+const HOST_AUTHORITY: &str = "127.0.0.1:4317";
+
+#[derive(Clone)]
+struct SecurityConfig {
+    token: Arc<str>,
+    allowed_origin: HeaderValue,
+}
+
+impl SecurityConfig {
+    fn new(token: String, origin: &str) -> Result<Self, &'static str> {
+        if !(32..=256).contains(&token.len())
+            || !token.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            return Err("PONG_HOST_TOKEN must be 32-256 ASCII letters or digits");
+        }
+        let uri: Uri = origin
+            .parse()
+            .map_err(|_| "Invalid PONG_HOST_ALLOWED_ORIGIN")?;
+        if uri.scheme_str() != Some("http")
+            || uri.host() != Some("127.0.0.1")
+            || uri.port_u16().is_none()
+            || origin != format!("http://127.0.0.1:{}", uri.port_u16().unwrap())
+        {
+            return Err("PONG_HOST_ALLOWED_ORIGIN must be an exact http://127.0.0.1:<port> origin");
+        }
+        let allowed_origin =
+            HeaderValue::from_str(origin).map_err(|_| "Invalid PONG_HOST_ALLOWED_ORIGIN")?;
+        Ok(Self {
+            token: token.into(),
+            allowed_origin,
+        })
+    }
+
+    fn from_env() -> Result<Self, &'static str> {
+        let token = env::var("PONG_HOST_TOKEN").map_err(|_| "PONG_HOST_TOKEN is required")?;
+        let origin = env::var("PONG_HOST_ALLOWED_ORIGIN")
+            .map_err(|_| "PONG_HOST_ALLOWED_ORIGIN is required")?;
+        Self::new(token, &origin)
+    }
+}
+
+async fn authenticate(
+    State(security): State<SecurityConfig>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let headers = request.headers();
+    if headers.get_all(header::HOST).iter().count() != 1
+        || headers
+            .get(header::HOST)
+            .is_none_or(|host| host != HOST_AUTHORITY)
+    {
+        return HostError::new(
+            StatusCode::FORBIDDEN,
+            "HOST_FORBIDDEN",
+            "Invalid Host authority",
+            false,
+        )
+        .into_response();
+    }
+    if headers.get_all(header::ORIGIN).iter().count() > 1
+        || headers
+            .get(header::ORIGIN)
+            .is_some_and(|origin| origin != security.allowed_origin)
+    {
+        return HostError::new(
+            StatusCode::FORBIDDEN,
+            "ORIGIN_FORBIDDEN",
+            "Origin is not allowed",
+            false,
+        )
+        .into_response();
+    }
+    let authorized = headers.get_all(header::AUTHORIZATION).iter().count() == 1
+        && headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(security.token.as_bytes())));
+    if !authorized {
+        return HostError::new(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_REQUIRED",
+            "Host authentication is required",
+            false,
+        )
+        .into_response();
+    }
+    next.run(request).await
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -766,6 +859,7 @@ async fn start_run(
 
 #[tokio::main]
 async fn main() {
+    let security = SecurityConfig::from_env().expect("configure local Host access");
     let database_path = env::var_os("PONG_HOST_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("pong-host.sqlite3"));
@@ -788,7 +882,7 @@ async fn main() {
     for (run_id, delay) in recovering_runs {
         schedule_run_completion(state.clone(), run_id, delay);
     }
-    let app = router(state);
+    let app = router(state, security);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:4317")
         .await
         .expect("bind host");
@@ -796,7 +890,11 @@ async fn main() {
     axum::serve(listener, app).await.expect("serve host");
 }
 
-fn router(state: AppState) -> Router {
+fn router(state: AppState, security: SecurityConfig) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(security.allowed_origin.clone())
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::PUT])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
     Router::new()
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
@@ -820,7 +918,8 @@ fn router(state: AppState) -> Router {
             "/api/canvases/{canvas_id}/runs",
             get(list_runs).post(start_run),
         )
-        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn_with_state(security, authenticate))
+        .layer(cors)
         .with_state(state)
 }
 
@@ -832,6 +931,21 @@ mod tests {
         http::Request,
     };
     use tower::ServiceExt;
+
+    const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const TEST_ORIGIN: &str = "http://127.0.0.1:4174";
+
+    fn test_security() -> SecurityConfig {
+        SecurityConfig::new(TEST_TOKEN.to_string(), TEST_ORIGIN).unwrap()
+    }
+
+    #[test]
+    fn local_security_configuration_fails_closed() {
+        assert!(SecurityConfig::new("short".to_string(), TEST_ORIGIN).is_err());
+        assert!(SecurityConfig::new(TEST_TOKEN.to_string(), "http://evil.invalid:4174").is_err());
+        assert!(SecurityConfig::new(TEST_TOKEN.to_string(), "http://127.0.0.1:4174/path").is_err());
+        assert!(SecurityConfig::new(TEST_TOKEN.to_string(), "https://127.0.0.1:4174").is_err());
+    }
 
     fn wire_fixtures() -> serde_json::Value {
         serde_json::from_str(include_str!(
@@ -918,13 +1032,15 @@ mod tests {
              VALUES (?1, 'projection.snapshot.updated', 7, 7, '2026-09-24T08:00:00.000Z')",
             params!["88888888-8888-4888-8888-888888888888"],
         ).unwrap();
-        let app = router(state);
+        let app = router(state, test_security());
 
         let snapshot_response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/snapshot")
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -961,6 +1077,8 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/api/events?afterGlobalPosition=0")
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -981,6 +1099,8 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri(format!("/api/canvases/{canvas_id}/runs"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         r#"{"revision":1,"entrypoint":"default","idempotencyKey":"stale"}"#,
@@ -997,6 +1117,136 @@ mod tests {
         )
         .unwrap();
         assert_eq!(error_json, fixtures["error"]);
+    }
+
+    #[tokio::test]
+    async fn local_host_rejects_unauthenticated_foreign_origin_and_wrong_authority() {
+        let state = test_state(test_database());
+        let app = router(state.clone(), test_security());
+        for (host, origin, authorization, status, code) in [
+            (
+                HOST_AUTHORITY,
+                Some(TEST_ORIGIN),
+                None,
+                StatusCode::UNAUTHORIZED,
+                "AUTH_REQUIRED",
+            ),
+            (
+                HOST_AUTHORITY,
+                Some(TEST_ORIGIN),
+                Some("Bearer wrong"),
+                StatusCode::UNAUTHORIZED,
+                "AUTH_REQUIRED",
+            ),
+            (
+                HOST_AUTHORITY,
+                Some("http://evil.invalid:4174"),
+                Some(TEST_TOKEN),
+                StatusCode::FORBIDDEN,
+                "ORIGIN_FORBIDDEN",
+            ),
+            (
+                HOST_AUTHORITY,
+                Some("null"),
+                Some(TEST_TOKEN),
+                StatusCode::FORBIDDEN,
+                "ORIGIN_FORBIDDEN",
+            ),
+            (
+                "evil.invalid:4317",
+                Some(TEST_ORIGIN),
+                Some(TEST_TOKEN),
+                StatusCode::FORBIDDEN,
+                "HOST_FORBIDDEN",
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/workspaces")
+                .header(header::HOST, host)
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(origin) = origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            if let Some(token) = authorization {
+                let value = if token == TEST_TOKEN {
+                    format!("Bearer {token}")
+                } else {
+                    token.to_string()
+                };
+                request = request.header(header::AUTHORIZATION, value);
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    request
+                        .body(Body::from(
+                            r#"{"name":"Unauthorized","path":"D:/Research"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["code"], code);
+        }
+        assert!(state.inner.lock().unwrap().workspaces.is_empty());
+
+        let accepted = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workspaces")
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::ORIGIN, TEST_ORIGIN)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"Research","path":"D:/Research"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::CREATED);
+        assert_eq!(
+            accepted
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            TEST_ORIGIN
+        );
+        assert_eq!(state.inner.lock().unwrap().workspaces.len(), 1);
+
+        for (origin, allowed) in [(TEST_ORIGIN, true), ("http://evil.invalid:4174", false)] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::OPTIONS)
+                        .uri("/api/workspaces")
+                        .header(header::HOST, HOST_AUTHORITY)
+                        .header(header::ORIGIN, origin)
+                        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(
+                            header::ACCESS_CONTROL_REQUEST_HEADERS,
+                            "authorization,content-type",
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .is_some_and(|value| value == origin),
+                allowed
+            );
+        }
     }
 
     fn test_database() -> Connection {

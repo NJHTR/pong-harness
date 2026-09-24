@@ -9,7 +9,7 @@ Seekwd 是一个本地优先的 Agent 工作台。用户用自然语言描述目
 - `apps/workbench`：独立的 React/Vite 产品前端入口，提供有限的 Workspace、Canvas 和 Run 操作；画布图仍主要是静态展示。
 - `crates/pong-core`、`crates/pong-host`：本地 Rust Host 的最小模型和 HTTP 接口。Host 使用 SQLite 保存快照、Run 幂等日志和快照更新游标。
 
-Workbench 默认使用浏览器 `localStorage` 适配器；设置 `VITE_HOST_URL` 后才能连接本地 Host。Host 的 Run 仍是约 1.6 秒的模拟完成，不执行节点、文件操作或测试；尚无真实 Worker、LocalRestricted 沙箱或 Tauri 桌面壳。当前 HTTP Host 没有正式认证边界，只限受控的本地开发验证，不可开放任意执行能力。
+Workbench 默认使用浏览器 `localStorage` 适配器。开发时可通过同源 Vite 代理连接本地 Host；token 仅保存在开发服务器环境变量中，不写进 `VITE_*` 前端资源。Host 的 Run 仍是约 1.6 秒的模拟完成，不执行节点、文件操作或测试；尚无真实 Worker、LocalRestricted 沙箱或 Tauri 桌面壳。此开发 HTTP 边界不是正式的本机用户会话或受保护 IPC，不可据此开放任意执行能力。
 
 ## 本地开发
 
@@ -20,13 +20,23 @@ pnpm dev
 
 `pnpm dev` 启动 UI Lab。正式前端的纵向原型可以单独运行：
 
+在两个 PowerShell 终端设置**相同的随机 token**（例如先生成 32 字节随机值，再将值分别赋给两个终端的 `PONG_HOST_TOKEN`；不要提交、打印或放入 `VITE_*` 变量）：
+
 ```powershell
+# 终端 1：Host
+$env:PONG_HOST_TOKEN = "<64 位十六进制随机值>"
+$env:PONG_HOST_ALLOWED_ORIGIN = "http://127.0.0.1:4174"
 cargo run -p pong-host
-$env:VITE_HOST_URL = "http://127.0.0.1:4317"
+
+# 终端 2：Workbench 开发代理
+$env:PONG_HOST_TOKEN = "<同一个随机值>"
+$env:VITE_HOST_PROXY = "1"
 pnpm dev:workbench
 ```
 
-Host 默认在当前目录创建 `pong-host.sqlite3`；可用 `PONG_HOST_DB` 指定本地测试数据库。不要将该开发接口暴露给其他设备或不可信网页。
+随机值可在可信的 PowerShell 会话中用 `[Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))` 生成。Workbench 固定在 `127.0.0.1:4174`，Host 固定在 `127.0.0.1:4317`；端口占用时会失败而非改用未知端口。未设置 token/允许来源时 Host 拒绝启动。Bearer token、Host authority 和 Origin 都由 Host 检查；CORS 只限制浏览器读取，不是认证。无 Origin 的本地命令行客户端仍须持有 token。Vite 代理只能用于受控开发，不能抵御同一用户下能访问本机开发服务的恶意进程；正式发行需要绑定本机用户和客户端实例的受保护 IPC/Session。
+
+Host 默认在当前目录创建 `pong-host.sqlite3`；可用 `PONG_HOST_DB` 指定本地测试数据库。不要将开发服务暴露给其他设备或不可信网页。
 
 ```powershell
 pnpm typecheck

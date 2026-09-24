@@ -6,8 +6,8 @@ import type { Canvas, HostSnapshot, Workspace } from "@seekwd/protocol-schema";
 import "@seekwd/ui/styles.css";
 import "./workbench.css";
 
-const client = import.meta.env.VITE_HOST_URL
-  ? createHttpHostClient(import.meta.env.VITE_HOST_URL)
+const client = import.meta.env.VITE_HOST_PROXY === "1"
+  ? createHttpHostClient("")
   : createLocalHostClient();
 
 function App() {
@@ -24,7 +24,7 @@ function App() {
     ? snapshot.nodes.find((node) => node.id === activeCanvas.defaultEntrypointNodeId)
     : undefined;
 
-  useEffect(() => { client.snapshot().then(setSnapshot); return client.subscribe(setSnapshot); }, []);
+  useEffect(() => { void client.snapshot().then(setSnapshot).catch((error) => setNotice(error instanceof Error ? error.message : "Host connection failed")); return client.subscribe(setSnapshot); }, []);
   useEffect(() => { if (activeWorkspace && !workspaceId) setWorkspaceId(activeWorkspace.id); if (activeCanvas && !canvasId) setCanvasId(activeCanvas.id); }, [activeWorkspace, activeCanvas, workspaceId, canvasId]);
   useEffect(() => { const item = snapshot.notifications[0]; if (!item) return; setNotice(item.message); const timer = window.setTimeout(() => setNotice(undefined), 5000); return () => window.clearTimeout(timer); }, [snapshot.notifications]);
 
