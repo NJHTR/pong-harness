@@ -2,7 +2,8 @@
 
 > 文档类型：Product Delivery Roadmap / Work Breakdown Structure  
 > 文档状态：Experimental Proposal  
-> 统计日期：2026-09-20  
+> 原始估算日期：2026-09-20；第 2 节及下方任务表的百分比尚未逐条重估，不代表 2026-09-24 当前完成度。
+> 仓库事实核对日期：2026-09-24（仅第 1.2 节及第 2.1 节）
 > 适用分支：`dev`  
 > 关联文档：[全系统 PRD](29-system-product-requirements.md) · [系统拆分与流程模型](31-system-decomposition-and-process-model.md) · [正式合同](27-normative-contracts/00-README.md) · [开放门禁](28-design-review/01-open-gate-matrix.md) · [当前实现状态](25-implementation-blueprint/15-current-implementation-status.md)
 
@@ -33,13 +34,13 @@
 | 90% | 具备完整实现和合同测试，缺少发布/性能/安全收尾 |
 | 100% | 通过 Definition of Done、端到端、恢复和开放门禁验收 |
 
-### 1.2 当前仓库基线
+### 1.2 当前仓库基线（2026-09-24 复核）
 
 - `apps/ui-lab`：React/Vite UI 设计验证应用，包含 Workbench、Canvas、节点、连接、Workspace 管理、Automations、Extensions、Settings、Files、Environments、Agents 和通知 Mock。
 - `packages/seekwd-ui`：组件库，包含 WindowFrame、Sidebar、CanvasNode、Button、Dialog、Notification 等组件。
 - `apps/ui-lab/src/mock`：内存 Mock API，已覆盖部分 Workspace、Canvas、Node、Edge、Run 和 Notification 命令。
-- 当前没有独立的 `apps/workbench`（或等价目录）正式产品前端；UI Lab 不能计作正式前端应用。
-- 当前 checkout 没有可运行的 Rust Host、SQLite 持久化、Worker 执行器、Sandbox、Docker 或远程执行器源码；文档中关于这些模块的设计不能计入代码完成度。
+- `apps/workbench` 已有独立 React/Vite 入口。默认 `localStorage` 模拟适配器，可通过 `VITE_HOST_URL` 接入 HTTP Host；图展示仍是固定视图，不能替代完整正式前端。
+- Cargo workspace 只有 `pong-core` 和 `pong-host`。Host 有 SQLite 快照、幂等日志、快照更新事件游标和部分恢复测试；没有真实 Worker、Sandbox、Docker 或远程执行器，也没有完整 Event Store。
 - UI Lab 中部分页面仍然直接使用 React local state，而不是完整 Mock API；这些完成度只计作演示完成，不计作生产闭环完成。
 
 ### 1.3 负责人角色
@@ -71,7 +72,9 @@
 | P5 Agent & Extension Pilot | W16–W19 | Agent、GraphPatch、Extension、Automation 和跨画布试点 |
 | P6 Hardening / Pilot Gate | W20–W24 | 安全、性能、迁移、备份、恢复和受邀用户验收 |
 
-## 2. 进度总览
+## 2. 进度总览（2026-09-20 历史估算）
+
+以下百分比保留原始计划估算供对比，**不再作为当前进度或阶段出口依据**。未复核的单条任务表同理；当前已核对的代码证据见第 2.1 节。禁止把本节百分比汇总为一个“系统完成率”。
 
 | 一级功能 | 设计覆盖 | 代码符合比率 | 当前状态 | 目标阶段 |
 |---|---:|---:|---|---|
@@ -94,6 +97,19 @@
 | 系统流程与模块模型 | 90% | 35% | 已补充业务域、行为分类、数据流和状态图；需与合同测试和实现逐项对齐 | P0–P6 |
 
 > 进度口径：CRUD 页面或 Mock 可用，不代表 Execute、Control、Validate、Approve、Observe、Recover、Reconcile、Audit 和 Govern 已完成。
+
+### 2.1 已复核的代码事实（2026-09-24）
+
+| 需求范围 | 已有证据 | 尚未达到的验收 |
+|---|---|---|
+| `P0-009`、`P0-010` | TS Host 类型、Rust 简化模型及本文稳定需求 ID 已存在 | 尚无跨语言 Schema 生成/合同测试；需求到提交、测试、门禁的完整追踪仍待建立 |
+| `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动，SQLite 快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无单实例锁、WAL/迁移、Worker/Wait/Handle 恢复或完整崩溃演练 |
+| `HST-R-001`、`HST-C-003`、`HST-C-004`、`HST-R-002` | 部分 Query/Command HTTP 路由、`StartRun` 幂等键、快照版本和快照更新事件游标 | 无认证/授权、完整 Command/Event Envelope、Outbox/Inbox、事件重放及游标过期重同步 |
+| `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、简化 Revision 元数据可持久化 | 未做目录预检、CanvasDraft/Graph 持久化、不可变 Revision 内容、Release、影响分析与恢复 |
+| `RUN-C-001`、`HST-V-001` | 默认入口 + 修订号 + 幂等键可启动模拟 Run，重启后定时完成 | 无输入、模式、Authority、Budget、RunSnapshot、NodeRun 或真实执行；模拟成功不能当作工作完成 |
+| `FNT-ARCH-001`、`FNT-DATA-001`、`FNT-DATA-004` | 独立 Workbench 可构建；同一有限 HostClient 有本地模拟与 HTTP 适配器，HTTP 轮询快照更新 | 无桌面壳、错误边界、稳定游标持久化、事件去重、断线重同步或完整模块路由 |
+
+详细的逐项证据与未完成条件应单独维护；未列出的需求保持“未复核”，不沿用历史百分比作为完成声明。
 
 ## 3. P0：合同冻结与项目基线
 

@@ -5,9 +5,11 @@ Seekwd 是一个本地优先的 Agent 工作台。用户用自然语言描述目
 ## 当前可运行内容
 
 - `packages/seekwd-ui`：从 WebSwift 风格演化出的 React 工作台组件库，包含双主题、基础控件、工作台布局和节点外观。
-- `apps/ui-lab`：Seekwd UI 的可交互展示页，包含组件状态和工作台缩略原型。
+- `apps/ui-lab`：Seekwd UI 的可交互设计原型，部分操作使用内存 Mock。
+- `apps/workbench`：独立的 React/Vite 产品前端入口，提供有限的 Workspace、Canvas 和 Run 操作；画布图仍主要是静态展示。
+- `crates/pong-core`、`crates/pong-host`：本地 Rust Host 的最小模型和 HTTP 接口。Host 使用 SQLite 保存快照、Run 幂等日志和快照更新游标。
 
-先前设计文档中记录的 `apps/workbench`、`crates/pong-*` 和 Tauri 桌面壳代码不在当前目录中；它们不能视为这个工作树内的可运行实现。UI Lab 是目前的可运行内容，尚未接入真实画布编辑器或 Host。
+Workbench 默认使用浏览器 `localStorage` 适配器；设置 `VITE_HOST_URL` 后才能连接本地 Host。Host 的 Run 仍是约 1.6 秒的模拟完成，不执行节点、文件操作或测试；尚无真实 Worker、LocalRestricted 沙箱或 Tauri 桌面壳。当前 HTTP Host 没有正式认证边界，只限受控的本地开发验证，不可开放任意执行能力。
 
 ## 本地开发
 
@@ -16,11 +18,20 @@ pnpm install
 pnpm dev
 ```
 
-当前 `pnpm dev` 启动 UI Lab，浏览器预览地址为 `http://127.0.0.1:4173`（端口已被占用时 Vite 会选择其他端口）。UI Lab 只验证组件和交互，不会伪造 Host 保存或执行。
+`pnpm dev` 启动 UI Lab。正式前端的纵向原型可以单独运行：
+
+```powershell
+cargo run -p pong-host
+$env:VITE_HOST_URL = "http://127.0.0.1:4317"
+pnpm dev:workbench
+```
+
+Host 默认在当前目录创建 `pong-host.sqlite3`；可用 `PONG_HOST_DB` 指定本地测试数据库。不要将该开发接口暴露给其他设备或不可信网页。
 
 ```powershell
 pnpm typecheck
 pnpm build
+cargo test --workspace
 ```
 
 ## 设计文档
