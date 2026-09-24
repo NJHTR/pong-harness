@@ -6,7 +6,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use pong_core::{Canvas, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -184,6 +184,17 @@ fn default_event_limit() -> u64 {
     100
 }
 
+fn invalid_persisted_state(message: impl Into<String>) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            message.into(),
+        )),
+    )
+}
+
 impl From<Snapshot> for Store {
     fn from(snapshot: Snapshot) -> Self {
         Self {
@@ -290,35 +301,78 @@ fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store, u64)> {
            occurred_at TEXT NOT NULL
          );",
     )?;
-    let loaded_snapshot = connection
+    let (store, snapshot_version) = load_persisted_state(&connection)?;
+    Ok((connection, store, snapshot_version))
+}
+
+fn load_persisted_state(connection: &Connection) -> rusqlite::Result<(Store, u64)> {
+    let snapshot_json = connection
         .query_row(
             "SELECT snapshot_json FROM host_state WHERE id = 1",
             [],
             |row| row.get::<_, String>(0),
         )
-        .ok()
-        .and_then(|json| serde_json::from_str::<Snapshot>(&json).ok());
+        .optional()?;
+    let loaded_snapshot = snapshot_json
+        .map(|json| {
+            serde_json::from_str::<Snapshot>(&json)
+                .map_err(|error| invalid_persisted_state(format!("Invalid Host snapshot: {error}")))
+        })
+        .transpose()?;
     let snapshot_version = loaded_snapshot
         .as_ref()
         .map(|snapshot| snapshot.snapshot_version)
         .unwrap_or_default();
+    let (event_count, latest_event_position): (i64, Option<i64>) = connection.query_row(
+        "SELECT COUNT(*), MAX(global_position) FROM host_events",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if latest_event_position.unwrap_or_default() < 0
+        || latest_event_position.unwrap_or_default() as u64 != snapshot_version
+        || event_count as u64 != snapshot_version
+    {
+        return Err(invalid_persisted_state(
+            "Host snapshot version and event cursor do not match",
+        ));
+    }
     let mut store = loaded_snapshot.map(Store::from).unwrap_or_default();
-    let mut statement =
-        connection.prepare("SELECT canvas_id, idempotency_key, run_id FROM command_journal")?;
+    let mut statement = connection.prepare(
+        "SELECT canvas_id, idempotency_key, run_id, revision, entrypoint FROM command_journal",
+    )?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
         ))
     })?;
-    for row in rows.flatten() {
-        if let (Ok(canvas_id), Ok(run_id)) = (Uuid::parse_str(&row.0), Uuid::parse_str(&row.2)) {
-            store.run_idempotency.insert((canvas_id, row.1), run_id);
+    for row in rows {
+        let (canvas_id, key, run_id, revision, entrypoint) = row?;
+        let canvas_id = Uuid::parse_str(&canvas_id).map_err(|error| {
+            invalid_persisted_state(format!("Invalid journal canvas ID: {error}"))
+        })?;
+        let run_id = Uuid::parse_str(&run_id)
+            .map_err(|error| invalid_persisted_state(format!("Invalid journal Run ID: {error}")))?;
+        let run = store
+            .runs
+            .get(&run_id)
+            .ok_or_else(|| invalid_persisted_state("Command journal references a missing Run"))?;
+        if key.trim().is_empty()
+            || revision < 0
+            || run.canvas_id != canvas_id
+            || run.revision != revision as u64
+            || entrypoint != "default"
+        {
+            return Err(invalid_persisted_state(
+                "Command journal does not match its persisted Run",
+            ));
         }
+        store.run_idempotency.insert((canvas_id, key), run_id);
     }
-    drop(statement);
-    Ok((connection, store, snapshot_version))
+    Ok((store, snapshot_version))
 }
 
 fn now() -> String {
@@ -770,6 +824,10 @@ async fn main() {
 mod tests {
     use super::*;
 
+    fn test_database() -> Connection {
+        open_database(PathBuf::from(":memory:")).unwrap().0
+    }
+
     fn test_state(connection: Connection) -> AppState {
         AppState {
             inner: Arc::new(Mutex::new(Store::default())),
@@ -808,5 +866,158 @@ mod tests {
         assert_eq!(error.body.code, "PERSISTENCE_FAILED");
         assert_eq!(store.workspaces.get(&workspace.id).unwrap().name, "before");
         assert_eq!(*state.snapshot_version.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn empty_database_is_the_only_implicit_empty_store() {
+        let connection = test_database();
+        let (store, version) = load_persisted_state(&connection).unwrap();
+
+        assert_eq!(version, 0);
+        assert!(store.workspaces.is_empty());
+    }
+
+    #[test]
+    fn invalid_snapshot_does_not_become_an_empty_store() {
+        let connection = test_database();
+        connection
+            .execute(
+                "INSERT INTO host_state (id, snapshot_json) VALUES (1, '{invalid')",
+                [],
+            )
+            .unwrap();
+
+        let error = load_persisted_state(&connection).err().unwrap();
+
+        assert!(error.to_string().contains("Invalid Host snapshot"));
+    }
+
+    #[test]
+    fn missing_snapshot_table_is_not_treated_as_an_empty_store() {
+        let connection = test_database();
+        connection.execute("DROP TABLE host_state", []).unwrap();
+
+        assert!(load_persisted_state(&connection).is_err());
+    }
+
+    #[test]
+    fn snapshot_and_event_cursor_must_agree() {
+        let connection = test_database();
+        let mut snapshot = Snapshot::from(&Store::default());
+        snapshot.snapshot_version = 1;
+        connection
+            .execute(
+                "INSERT INTO host_state (id, snapshot_json) VALUES (1, ?1)",
+                params![serde_json::to_string(&snapshot).unwrap()],
+            )
+            .unwrap();
+
+        let error = load_persisted_state(&connection).err().unwrap();
+
+        assert!(error.to_string().contains("event cursor do not match"));
+    }
+
+    #[test]
+    fn legacy_snapshot_without_event_cursor_still_recovers() {
+        let connection = test_database();
+        let mut legacy_snapshot = serde_json::to_value(Snapshot::from(&Store::default())).unwrap();
+        legacy_snapshot
+            .as_object_mut()
+            .unwrap()
+            .remove("snapshotVersion");
+        connection
+            .execute(
+                "INSERT INTO host_state (id, snapshot_json) VALUES (1, ?1)",
+                params![legacy_snapshot.to_string()],
+            )
+            .unwrap();
+
+        let (_, version) = load_persisted_state(&connection).unwrap();
+
+        assert_eq!(version, 0);
+    }
+
+    #[test]
+    fn orphaned_command_journal_rejects_startup() {
+        let connection = test_database();
+        connection
+            .execute(
+                "INSERT INTO command_journal (canvas_id, idempotency_key, run_id, revision, entrypoint) VALUES (?1, 'key', ?2, 0, 'default')",
+                params![Uuid::new_v4().to_string(), Uuid::new_v4().to_string()],
+            )
+            .unwrap();
+
+        let error = load_persisted_state(&connection).err().unwrap();
+
+        assert!(error.to_string().contains("missing Run"));
+    }
+
+    #[test]
+    fn mismatched_command_journal_rejects_startup() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let mut store = Store::default();
+        store.runs.insert(
+            run_id,
+            Run {
+                id: run_id,
+                canvas_id,
+                revision: 2,
+                status: RunStatus::Succeeded,
+                started_at: now(),
+                finished_at: Some(now()),
+            },
+        );
+        state.persist(&store).unwrap();
+        let connection = state.db.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO command_journal (canvas_id, idempotency_key, run_id, revision, entrypoint) VALUES (?1, 'key', ?2, 3, 'default')",
+                params![canvas_id.to_string(), run_id.to_string()],
+            )
+            .unwrap();
+
+        let error = load_persisted_state(&connection).err().unwrap();
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its persisted Run")
+        );
+    }
+
+    #[test]
+    fn valid_snapshot_and_command_journal_recover_together() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let mut store = Store::default();
+        store.runs.insert(
+            run_id,
+            Run {
+                id: run_id,
+                canvas_id,
+                revision: 2,
+                status: RunStatus::Succeeded,
+                started_at: now(),
+                finished_at: Some(now()),
+            },
+        );
+        store
+            .run_idempotency
+            .insert((canvas_id, "run-key".to_string()), run_id);
+        state.persist(&store).unwrap();
+
+        let connection = state.db.lock().unwrap();
+        let (restored, version) = load_persisted_state(&connection).unwrap();
+
+        assert_eq!(version, 1);
+        assert_eq!(
+            restored
+                .run_idempotency
+                .get(&(canvas_id, "run-key".to_string())),
+            Some(&run_id)
+        );
     }
 }
