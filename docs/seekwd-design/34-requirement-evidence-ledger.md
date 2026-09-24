@@ -36,9 +36,9 @@
 | `HST-V-001` | 模拟 Run 重启后重新定时 (`fcf52bb`)，启动日志一致性校验 (`f18faf8`) | `legacy_snapshot_without_event_cursor_still_recovers`、`orphaned_command_journal_rejects_startup`、`mismatched_command_journal_rejects_startup`；无进程重启 E2E | **部分实现**；不能恢复 Worker、Wait、Handle、Outbox/Inbox 或外部副作用。 |
 | `WSP-C-001` | Host 创建简化 Workspace (`5ea6683`) | 无路径预检测试 | **部分实现**；未检查真实目录、权限、符号链接和磁盘空间。 |
 | `WSP-U-001` | Host 重命名保留 ID/路径 (`5ea6683`) | 无重命名与引用合同测试 | **部分实现**；正式 Workbench 未提供对应入口，缺引用/冲突测试。 |
-| `CVS-C-001` | Host 创建 Canvas 和 `trigger.start` 节点 (`0919ff8`) | 无唯一默认入口合同测试 | **部分实现**；没有 CanvasDraft、Graph 和完整 Entrypoint 模型。 |
+| `CVS-C-001` | Host 创建 Canvas 和 `trigger.start` 节点 (`0919ff8`)；Canvas 输出增加 `draftRevision`/`draftDirty`（本次代码提交待填） | `legacy_snapshot_defaults_draft_and_revision_content_fields`；创建 Canvas 初始化 Draft 版本字段 | **部分实现**；当前只有单一默认入口和简化节点集合，尚无完整 GraphDocument、命名入口/触发器或 Draft 命令 API。 |
 | `CVS-U-001` | Host 原地更新 Canvas 显示名 (`5ea6683`)；Workbench 有入口 (`acb09c0`) | 无历史 Run/Release 引用测试 | **部分实现**；尚无 Release 和跨画布引用验证。 |
-| `REV-C-001` | Host 保存 Revision 编号和元数据 (`5ea6683`) | 无不可变 Graph/Digest 合同测试 | **部分实现**；未冻结 Draft 图、定义引用、校验报告或 Digest；不能作为真实运行输入。 |
+| `REV-C-001` | Host 保存 Revision 编号和元数据 (`5ea6683`)；当前保存冻结按画布排序的节点图 JSON、`sha256:` 内容摘要，并支持 `expectedDraftRevision`（本次代码提交待填） | `save_revision_requires_current_draft_revision_and_freezes_digest`、`graph_digest_is_stable_for_node_order`、`legacy_snapshot_defaults_draft_and_revision_content_fields`；Schema fixture 含 `draftRevision`、`draftDirty`、`contentDigest`、`graphJson` | **部分实现**；已建立最小 Draft 乐观版本和 Revision 内容冻结，但还没有完整 GraphDocument、边/端口、ValidationReport、CompatibilityManifest、Release 或多 Draft。 |
 | `RUN-C-001` | 默认入口、修订号、幂等键的模拟 `StartRun` (`6489bf5`、`fcf52bb`) | 仅持久化/日志恢复单元测试；无完整 StartRun E2E | **部分实现**；无 Release/Debug Revision 精确引用、输入、Mode、Authority、Budget、RunSnapshot 或节点执行。 |
 | `FNT-ARCH-001` | `apps/workbench` 独立入口和构建 (`acb09c0`) | `pnpm -r typecheck`、`pnpm -r build` | **部分实现**；尚无发布配置、错误边界、桌面壳和生产级页面结构。 |
 | `FNT-DATA-001` | `packages/seekwd-client/src/index.ts` 的 `HostClient`、本地与 HTTP 适配器 (`5b5ee83`、`0b26e04`) | typecheck；无适配器合同测试 | **部分实现**；协议字段缺完整 Command/Query/Event 信封，本地适配器使用 `localStorage`。 |

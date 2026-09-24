@@ -105,7 +105,7 @@
 | `P0-009`、`P0-010` | 当前 Host HTTP 切片已有 JSON Schema 生成 TS 类型、Rust serde/HTTP 共享样本合同测试；稳定需求 ID 已存在；已核对条目见[证据台账](34-requirement-evidence-ledger.md) | 完整领域、Rust/SQLite/IPC 生成和版本兼容未完成；追踪只覆盖当前纵向切片，未覆盖全部需求及 Issue/PR |
 | `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动；开发 HTTP 已有限制来源与 Bearer 凭据，Host 按数据库路径持有跨平台独占锁并支持 Ctrl+C 优雅关闭；SQLite 快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无本机用户绑定 Session、受保护 IPC、WAL/迁移、Worker/Wait/Handle 恢复或完整崩溃演练 |
 | `HST-R-001`、`HST-C-003`、`HST-C-004`、`HST-R-002` | 部分 Query/Command HTTP 路由、`StartRun` 幂等键、快照版本和快照更新事件游标 | 无认证/授权、完整 Command/Event Envelope、Outbox/Inbox、事件重放及游标过期重同步 |
-| `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、简化 Revision 元数据可持久化 | 未做目录预检、CanvasDraft/Graph 持久化、不可变 Revision 内容、Release、影响分析与恢复 |
+| `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、Canvas Draft 修订字段和最小节点图 JSON Revision 摘要可持久化 | 未做目录预检、完整 CanvasDraft/Graph 命令、端口/边、Release、影响分析与恢复 |
 | `RUN-C-001`、`HST-V-001` | 默认入口 + 修订号 + 幂等键可启动模拟 Run，重启后定时完成 | 无输入、模式、Authority、Budget、RunSnapshot、NodeRun 或真实执行；模拟成功不能当作工作完成 |
 | `FNT-ARCH-001`、`FNT-DATA-001`、`FNT-DATA-004` | 独立 Workbench 可构建；同一有限 HostClient 有本地模拟与 HTTP 适配器，HTTP 轮询快照更新 | 无桌面壳、错误边界、稳定游标持久化、事件去重、断线重同步或完整模块路由 |
 
@@ -182,7 +182,7 @@
 
 | 需求编号 | 一级功能 | 二级功能 | 功能描述 | 符合比率 | 时间 | 负责人 | 备注 |
 |---|---|---|---|---:|---|---|---|
-| CVS-C-001 | Canvas | 创建空白画布 | 创建 CanvasIdentity、CanvasDraft 和唯一 Default Entrypoint。 | 35% | W2 | FE/BE | UI 可创建名称；默认入口尚未按新合同建模。 |
+| CVS-C-001 | Canvas | 创建空白画布 | 创建 CanvasIdentity、CanvasDraft 和唯一 Default Entrypoint。 | 35% | W2 | FE/BE | Host 已初始化最小 `draftRevision=0`/`draftDirty=false` 和默认入口；完整 Draft/Entrypoint 合同仍缺。 |
 | CVS-C-002 | Canvas | 模板创建 | 从 Template、Revision、RunBranch 或导入包创建新 Canvas。 | 0% | W7 | FE/BE/EXT | 需 Import/Template。 |
 | CVS-R-001 | Canvas | 列表 | 展示名称、Draft、Revision、Release、入口、Trigger 和聚合运行状态。 | 50% | W2 | FE | 侧栏和 Mock 有基础列表。 |
 | CVS-R-002 | Canvas | 详情 | 展示 Graph 摘要、版本、调用方、Automation、Run 和 Artifact。 | 15% | W3 | FE/BE | 详情页未建。 |
@@ -192,10 +192,10 @@
 | CVS-D-002 | Canvas | 删除与恢复 | 逻辑删除、冷静期、恢复和不可恢复确认。 | 0% | W6 | BE/OPS | 依赖持久化和 Retention。 |
 | DRF-C-001 | Canvas | Draft 分支 | 从指定 Revision 创建 Draft，支持多个并行 Draft。 | 10% | W3 | BE/FE | 合同已定义，仓库未实现。 |
 | DRF-R-001 | Canvas | Draft 状态 | 显示 basedOnRevision、draftRevision、dirty、作者和校验。 | 15% | W3 | FE | 目前 CanvasPreview 没有正式版本状态。 |
-| DRF-U-001 | Canvas | 草稿编辑 | 每个命令检查 expectedDraftRevision 并递增版本。 | 20% | W3 | BE/FE | UI 图编辑可用，未接版本命令。 |
+| DRF-U-001 | Canvas | 草稿编辑 | 每个命令检查 expectedDraftRevision 并递增版本。 | 20% | W3 | BE/FE | Revision 保存已检查 `expectedDraftRevision`；一般 Graph 命令仍未实现。 |
 | DRF-U-002 | Canvas | 冲突合并 | 对比本地/远端 Draft，支持保留本地、加载远端、逐项合并、另存。 | 0% | W6 | FE/BE/QA | P0 开放前要求。 |
 | DRF-D-001 | Canvas | 放弃草稿 | 展示未提交命令、Patch 和影响，确认后删除 Draft。 | 0% | W5 | FE/BE | 不能直接丢 local state。 |
-| REV-C-001 | Canvas | 保存 Revision | 将 Draft 完整图冻结为不可变 Revision，生成 Digest 和 Validation。 | 10% | W4 | BE/RT | 当前仓库没有持久 Host。 |
+| REV-C-001 | Canvas | 保存 Revision | 将 Draft 完整图冻结为不可变 Revision，生成 Digest 和 Validation。 | 10% | W4 | BE/RT | 当前 Host 已冻结最小节点图 JSON 并生成 SHA-256；完整 Graph/Validation/Release 未实现。 |
 | REV-R-001 | Canvas | 版本历史 | 分页查看、比较、创建 Draft、查看来源 Patch。 | 0% | W5 | FE/BE | 页面缺失。 |
 | REV-U-001 | Canvas | 版本修复 | 不允许改旧 Revision，修复必须创建新 Draft/Revision。 | 0% | W4 | BE/QA | 由服务端保证。 |
 | REV-D-001 | Canvas | 版本归档 | 被 Release/Run 引用时只能归档元数据，不物理删除。 | 0% | W6 | BE/OPS | 依赖 Retention。 |
