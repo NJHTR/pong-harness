@@ -103,7 +103,7 @@
 | 需求范围 | 已有证据 | 尚未达到的验收 |
 |---|---|---|
 | `P0-009`、`P0-010` | 当前 Host HTTP 切片已有 JSON Schema 生成 TS 类型、Rust serde/HTTP 共享样本合同测试；稳定需求 ID 已存在；已核对条目见[证据台账](34-requirement-evidence-ledger.md) | 完整领域、Rust/SQLite/IPC 生成和版本兼容未完成；追踪只覆盖当前纵向切片，未覆盖全部需求及 Issue/PR |
-| `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动；开发 HTTP 已有限制来源与 Bearer 凭据；SQLite 快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无本机用户绑定 Session、受保护 IPC、单实例锁、WAL/迁移、Worker/Wait/Handle 恢复或完整崩溃演练 |
+| `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动；开发 HTTP 已有限制来源与 Bearer 凭据，Host 按数据库路径持有跨平台独占锁并支持 Ctrl+C 优雅关闭；SQLite 快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无本机用户绑定 Session、受保护 IPC、WAL/迁移、Worker/Wait/Handle 恢复或完整崩溃演练 |
 | `HST-R-001`、`HST-C-003`、`HST-C-004`、`HST-R-002` | 部分 Query/Command HTTP 路由、`StartRun` 幂等键、快照版本和快照更新事件游标 | 无认证/授权、完整 Command/Event Envelope、Outbox/Inbox、事件重放及游标过期重同步 |
 | `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、简化 Revision 元数据可持久化 | 未做目录预检、CanvasDraft/Graph 持久化、不可变 Revision 内容、Release、影响分析与恢复 |
 | `RUN-C-001`、`HST-V-001` | 默认入口 + 修订号 + 幂等键可启动模拟 Run，重启后定时完成 | 无输入、模式、Authority、Budget、RunSnapshot、NodeRun 或真实执行；模拟成功不能当作工作完成 |
@@ -271,7 +271,7 @@
 
 | 需求编号 | 一级功能 | 二级功能 | 功能描述 | 符合比率 | 时间 | 负责人 | 备注 |
 |---|---|---|---|---:|---|---|---|
-| HST-C-001 | Host | 单实例 Host | 启动、锁定、健康检查和安全关闭本地 Host。 | 0% | W2 | BE/OPS | 已有开发 HTTP token/来源限制与健康查询；单实例锁、用户绑定 Session、受保护 IPC、优雅关闭未实现。百分比为历史估算而非验收。 |
+| HST-C-001 | Host | 单实例 Host | 启动、锁定、健康检查和安全关闭本地 Host。 | 0% | W2 | BE/OPS | 已有开发 HTTP token/来源限制、按数据库路径的跨平台独占锁和 Ctrl+C 优雅关闭；用户绑定 Session、受保护 IPC、桌面编排和完整生命周期演练未实现。百分比为历史估算而非验收。 |
 | HST-C-002 | Host | SQLite 初始化 | WAL、版本迁移、事务、外键、索引和恢复检查。 | 0% | W2 | BE/OPS | 文档声明与当前代码不一致，需以代码证据重建。 |
 | HST-R-001 | Host | Query Router | 提供 Workspace、Canvas、Graph、Run、Artifact、Policy 和 Notification 查询。 | 10% | W3 | BE | 只有前端 Mock adapter。 |
 | HST-C-003 | Host | Command Router | 认证、幂等、版本、权限、ImpactAnalysis 和 CommandReceipt。 | 0% | W3 | BE/SEC | 开放前阻塞。 |
