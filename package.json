@@ -6,7 +6,8 @@
     "dev": "pnpm --filter @seekwd/ui-lab dev",
     "dev:workbench": "pnpm --filter @seekwd/workbench dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "check:requirements": "node scripts/check-requirement-ledger.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.1.12",

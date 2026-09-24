@@ -56,6 +56,7 @@
 | [31-system-decomposition-and-process-model.md](31-system-decomposition-and-process-model.md) | 系统平面、业务域、模块职责、业务/操作/数据流程、状态转换和失败恢复模型 |
 | [32-backend-and-middleware-selection.md](32-backend-and-middleware-selection.md) | 后端语言、Host、存储、IPC、事件、调度、执行隔离、安全中间件和分阶段演进选型 |
 | [33-distribution-and-user-operation-model.md](33-distribution-and-user-operation-model.md) | 桌面安装包、签名、更新、回滚、云端可选服务、用户模式和团队使用方式 |
+| [34-requirement-evidence-ledger.md](34-requirement-evidence-ledger.md) | 需求 ID、历史提交、代码与测试证据、未验收缺口和下一执行顺序 |
 
 ## 当前一句话定义
 

@@ -5,7 +5,7 @@
 > 原始估算日期：2026-09-20；第 2 节及下方任务表的百分比尚未逐条重估，不代表 2026-09-24 当前完成度。
 > 仓库事实核对日期：2026-09-24（仅第 1.2 节及第 2.1 节）
 > 适用分支：`dev`  
-> 关联文档：[全系统 PRD](29-system-product-requirements.md) · [系统拆分与流程模型](31-system-decomposition-and-process-model.md) · [正式合同](27-normative-contracts/00-README.md) · [开放门禁](28-design-review/01-open-gate-matrix.md) · [当前实现状态](25-implementation-blueprint/15-current-implementation-status.md)
+> 关联文档：[全系统 PRD](29-system-product-requirements.md) · [系统拆分与流程模型](31-system-decomposition-and-process-model.md) · [正式合同](27-normative-contracts/00-README.md) · [开放门禁](28-design-review/01-open-gate-matrix.md) · [当前实现状态](25-implementation-blueprint/15-current-implementation-status.md) · [需求证据台账](34-requirement-evidence-ledger.md)
 
 ## 1. 使用说明
 
@@ -102,14 +102,14 @@
 
 | 需求范围 | 已有证据 | 尚未达到的验收 |
 |---|---|---|
-| `P0-009`、`P0-010` | TS Host 类型、Rust 简化模型及本文稳定需求 ID 已存在 | 尚无跨语言 Schema 生成/合同测试；需求到提交、测试、门禁的完整追踪仍待建立 |
+| `P0-009`、`P0-010` | TS Host 类型、Rust 简化模型及本文稳定需求 ID 已存在；已核对条目见[证据台账](34-requirement-evidence-ledger.md) | 尚无跨语言 Schema 生成/合同测试；追踪只覆盖当前纵向切片，未覆盖全部需求及 Issue/PR |
 | `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动，SQLite 快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无单实例锁、WAL/迁移、Worker/Wait/Handle 恢复或完整崩溃演练 |
 | `HST-R-001`、`HST-C-003`、`HST-C-004`、`HST-R-002` | 部分 Query/Command HTTP 路由、`StartRun` 幂等键、快照版本和快照更新事件游标 | 无认证/授权、完整 Command/Event Envelope、Outbox/Inbox、事件重放及游标过期重同步 |
 | `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、简化 Revision 元数据可持久化 | 未做目录预检、CanvasDraft/Graph 持久化、不可变 Revision 内容、Release、影响分析与恢复 |
 | `RUN-C-001`、`HST-V-001` | 默认入口 + 修订号 + 幂等键可启动模拟 Run，重启后定时完成 | 无输入、模式、Authority、Budget、RunSnapshot、NodeRun 或真实执行；模拟成功不能当作工作完成 |
 | `FNT-ARCH-001`、`FNT-DATA-001`、`FNT-DATA-004` | 独立 Workbench 可构建；同一有限 HostClient 有本地模拟与 HTTP 适配器，HTTP 轮询快照更新 | 无桌面壳、错误边界、稳定游标持久化、事件去重、断线重同步或完整模块路由 |
 
-详细的逐项证据与未完成条件应单独维护；未列出的需求保持“未复核”，不沿用历史百分比作为完成声明。
+已核对条目的提交、测试与未完成条件见[需求证据台账](34-requirement-evidence-ledger.md)；未列出的需求保持“未复核”，不沿用历史百分比作为完成声明。
 
 ## 3. P0：合同冻结与项目基线
 
@@ -714,6 +714,7 @@ P0 合同 / Schema / 追踪
 3. 进入 90% 前必须有自动化测试和异常路径证据。
 4. 进入 100% 前必须通过对应阶段出口和开放门禁。
 5. 发现实现与合同冲突时，先标记为 `blocked`，不得通过降低需求描述来提高完成度。
+6. 新增实现先在[需求证据台账](34-requirement-evidence-ledger.md)记录需求 ID、合同、前置条件与验收用例；提交后回填提交哈希、测试结果和剩余缺口。旧条目的百分比未经复核不作为当前进度。
 
 ## 28. UI 原型到正式前端的迁移清单
 
