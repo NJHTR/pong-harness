@@ -36,6 +36,8 @@ pnpm dev:workbench
 
 随机值可在可信的 PowerShell 会话中用 `[Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))` 生成。Workbench 固定在 `127.0.0.1:4174`，Host 固定在 `127.0.0.1:4317`；端口占用时会失败而非改用未知端口。未设置 token/允许来源时 Host 拒绝启动。Bearer token、Host authority 和 Origin 都由 Host 检查；CORS 只限制浏览器读取，不是认证。无 Origin 的本地命令行客户端仍须持有 token。Vite 代理只能用于受控开发，不能抵御同一用户下能访问本机开发服务的恶意进程；正式发行需要绑定本机用户和客户端实例的受保护 IPC/Session。
 
+Host 会按 `PONG_HOST_DB` 路径持有跨平台独占的 `.lock` sidecar；同一数据库第二次启动会失败，不会启动两个互相覆盖快照的 Host。锁由操作系统句柄管理，进程崩溃后残留的 sidecar 不会永久阻塞下一次启动。收到 Ctrl+C 后 Host 停止接收新连接并优雅退出，正在处理的请求完成后释放数据库和实例锁。
+
 Host 默认在当前目录创建 `pong-host.sqlite3`；可用 `PONG_HOST_DB` 指定本地测试数据库。不要将开发服务暴露给其他设备或不可信网页。
 
 ```powershell

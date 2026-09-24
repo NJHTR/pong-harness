@@ -6,12 +6,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
+use fs2::FileExt;
 use pong_core::{Canvas, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env,
+    fs::{File, OpenOptions},
+    io,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -20,6 +23,35 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 const HOST_AUTHORITY: &str = "127.0.0.1:4317";
+
+struct InstanceLock {
+    file: File,
+}
+
+impl InstanceLock {
+    fn acquire(database_path: &PathBuf) -> io::Result<Self> {
+        let path = database_path.with_extension("lock");
+        let file = OpenOptions::new().create(true).write(true).open(&path)?;
+        file.try_lock_exclusive().map_err(|error| {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("Host instance lock is already held: {}", path.display()),
+                )
+            } else {
+                error
+            }
+        })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        let _ = self.file.sync_all();
+        let _ = self.file.unlock();
+    }
+}
 
 #[derive(Clone)]
 struct SecurityConfig {
@@ -863,6 +895,8 @@ async fn main() {
     let database_path = env::var_os("PONG_HOST_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("pong-host.sqlite3"));
+    let _instance_lock =
+        InstanceLock::acquire(&database_path).expect("acquire local Host instance lock");
     let (connection, store, snapshot_version) =
         open_database(database_path).expect("open pong-host database");
     let state = AppState {
@@ -887,7 +921,14 @@ async fn main() {
         .await
         .expect("bind host");
     println!("pong-host listening on http://127.0.0.1:4317");
-    axum::serve(listener, app).await.expect("serve host");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                eprintln!("failed to listen for shutdown signal: {error}");
+            }
+        })
+        .await
+        .expect("serve host");
 }
 
 fn router(state: AppState, security: SecurityConfig) -> Router {
@@ -937,6 +978,29 @@ mod tests {
 
     fn test_security() -> SecurityConfig {
         SecurityConfig::new(TEST_TOKEN.to_string(), TEST_ORIGIN).unwrap()
+    }
+
+    #[test]
+    fn instance_lock_is_exclusive_and_released_on_drop() {
+        let directory = std::env::temp_dir().join(format!("pong-host-lock-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("host.sqlite3");
+        let first = InstanceLock::acquire(&database).unwrap();
+        assert!(InstanceLock::acquire(&database).is_err());
+        drop(first);
+        let second = InstanceLock::acquire(&database).unwrap();
+        drop(second);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn instance_lock_is_scoped_to_the_database_path() {
+        let directory = std::env::temp_dir().join(format!("pong-host-lock-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = InstanceLock::acquire(&directory.join("first.sqlite3")).unwrap();
+        let second = InstanceLock::acquire(&directory.join("second.sqlite3")).unwrap();
+        drop((first, second));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
