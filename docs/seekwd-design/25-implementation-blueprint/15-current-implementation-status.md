@@ -1,7 +1,7 @@
 # 当前实现状态
 
 > 状态：Implementation Status
-> 代码核对日期：2026-09-24；以当前仓库源码为准，不把旧版蓝图或 UI Mock 当作运行能力。
+> 代码核对日期：2026-09-25；以当前仓库源码为准，不把旧版蓝图或 UI Mock 当作运行能力。
 
 这份文档记录设计蓝图已经落到代码的部分，避免把“有设计”误认为“已实现”。状态分为：
 
@@ -13,7 +13,7 @@
 
 - Cargo workspace 目前包含 `pong-core`、`pong-host`；Core 只有简化的 Workspace、Canvas、CanvasNode、CanvasRevision、Run、Notification 模型。
 - Host 提供本机 HTTP 的 Workspace/Canvas 创建与改名、默认入口设置、保存简化 Revision、启动/查询模拟 Run、快照与游标查询；开发接口要求启动 token、固定 Host authority 和显式允许的 Origin，Workbench 通过 Vite 同源开发代理连接。Host 按数据库路径持有跨平台独占实例锁，并使用 Ctrl+C 优雅关闭。
-- Host 使用 SQLite 单行序列化快照、幂等命令日志和 `projection.snapshot.updated` 事件记录；事务失败会回滚内存并返回错误，重启拒绝错误快照和不一致日志。
+- Host 使用 SQLite 单行序列化快照、幂等命令日志和 `projection.snapshot.updated` 事件记录；文件数据库启用 WAL、5 秒 busy timeout、`synchronous=NORMAL` 与外键检查，以 `user_version=1` 管理首版迁移。启动验证必需表、索引和约束；可事务迁移无版本旧表并保留记录，拒绝部分 schema、高于当前版本及恢复不一致数据。事务失败会回滚内存并返回错误。
 - `StartRun` 的默认入口、修订号和幂等键已校验；模拟运行中的 Run 重启后会继续定时完成。Host 当前有持久化失败和恢复路径的单元测试。
 - `apps/workbench` 是独立的 React/Vite 入口，复用部分 `seekwd-ui` 样式，可选连接 HTTP Host；默认 `localStorage` 适配器不是权威 Host。
 - `apps/ui-lab` 保留为较完整的视觉和 Mock 交互试验台，不是正式前端的已交付业务功能。
@@ -25,6 +25,7 @@
 - Workbench 的图是固定展示，缺持久的节点/端口/边编辑、类型化路由、断线状态和冲突恢复；HTTP 客户端轮询但没有完整重同步协议。
 - 无 `pong-runtime`、`pong-policy`、`pong-worker`、`pong-artifact`、`pong-agent` crate；没有 NodeRun 调度、真实执行器、审批、Artifact 和证据闭环。
 - 无 Tauri 桌面壳和安装包；Host 当前只有开发用 Bearer token/Origin 边界，尚无本机用户绑定 Session、受保护 IPC、桌面启动编排和完整崩溃健康恢复，仍不能承载任意本地执行。Vite 代理不是正式发行安全边界。
+- SQLite 仍是简化快照存储：尚无备份/恢复点、迁移回滚与崩溃注入演练、规范化领域外键、正式 Event Store/Outbox；当前 schema 的一致性校验不代表已具备完整生产级灾难恢复。
 
 ## 下一执行顺序
 
