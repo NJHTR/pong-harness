@@ -27,10 +27,10 @@
 | `P0-009` | `packages/protocol-schema/host-wire.schema.json`、生成器与 `src/host-wire.generated.ts`；Rust serde 位于 `crates/pong-core/src/lib.rs` 和 `crates/pong-host/src/main.rs`；`752a18e` | `pnpm --filter @seekwd/protocol-schema test`（3 个共享样本/负例测试）；`cargo test --workspace`（13 个 Host 测试，含 `host_snapshot_matches_shared_wire_fixture`、`host_event_error_and_request_match_shared_wire_fixtures`、`http_snapshot_events_and_error_match_shared_wire_fixtures`）；`cargo fmt --all -- --check`、`pnpm -r typecheck`、`pnpm -r build`、`pnpm check:requirements`、`git diff --check` 通过（2026-09-24） | **部分实现**；当前 Host HTTP 切片已有单一 JSON Schema 生成 TS 类型、Rust serde/HTTP 跨语言样本验证，修正 `null`/请求路径边界。完整领域、Rust/SQLite/IPC 生成、版本兼容、JSON extractor 错误归一化及安全整数边界尚未完成。详见 `packages/protocol-schema/README.md`。 |
 | `P0-010` | 本台账与矩阵稳定 ID；基线校准 `b7d5d75`；`scripts/check-requirement-ledger.mjs` | `pnpm check:requirements` 仅校验 ID 存在与唯一并报告覆盖数 | **部分实现**；历史提交开始回填，仍无逐项 Issue/PR、测试结果归档或全需求证据覆盖。 |
 | `P0-029` | `Cargo.toml`、`crates/pong-core`、`crates/pong-host` (`d0d75fb`) | `cargo check --workspace` | **部分实现**；已选择并创建本地 Rust 核心，但 Runtime/Policy/Worker 等 crate 尚不存在。 |
-| `HST-C-001` | `crates/pong-host/src/main.rs` 的本机监听与健康查询 (`d0d75fb`) | 编译通过；无进程生命周期合同测试 | **部分实现**；缺单实例锁、认证入口、优雅关闭和崩溃后健康验收。 |
+| `HST-C-001` | 本机监听与健康查询 (`d0d75fb`)；`crates/pong-host/src/main.rs` 的启动凭据、固定 Host/Origin 与 Bearer 检查及 `apps/workbench/vite.config.ts` 的开发代理 (`97b1897`) | `local_security_configuration_fails_closed`、`local_host_rejects_unauthenticated_foreign_origin_and_wrong_authority`、`http_snapshot_events_and_error_match_shared_wire_fixtures`；本机联调：直连无 token `401`、代理快照 `200`、外部 Origin 写入 `403`、允许来源预检通过；`cargo test --workspace` 15 个测试通过 | **部分实现**；该 token/代理只适用于受控开发，不是本机用户绑定 Session 或正式 IPC。仍缺单实例锁、优雅关闭、凭据轮换/撤销、进程生命周期和崩溃后健康验收。 |
 | `HST-C-002` | SQLite 快照和事务 (`d1844f7`)，失败回滚 (`82b08e8`)，启动拒绝坏数据 (`f18faf8`) | `failed_persist_does_not_advance_snapshot_version`、`failed_candidate_persist_restores_store`、`invalid_snapshot_does_not_become_an_empty_store`、`missing_snapshot_table_is_not_treated_as_an_empty_store`、`snapshot_and_event_cursor_must_agree` | **部分实现**；缺 WAL 配置、迁移版本、数据库备份/回滚、索引/外键与故障演练。 |
 | `HST-R-001` | `crates/pong-host/src/main.rs` 的 Workspace、Canvas、Run 和整体快照查询 (`5ea6683`) | 无 Query Router 合同测试 | **部分实现**；Graph、Artifact、Policy、Notification 的正式查询、分页和筛选未实现。 |
-| `HST-C-003` | `StartRun` 修订冲突与幂等键 (`6489bf5`)，结构化错误 (`f7813d4`)，落盘失败回滚 (`82b08e8`) | `failed_candidate_persist_restores_store`、`valid_snapshot_and_command_journal_recover_together` | **部分实现**；多数写命令没有 CommandEnvelope/幂等键，且缺认证、授权、ImpactAnalysis、CommandReceipt。 |
+| `HST-C-003` | `StartRun` 修订冲突与幂等键 (`6489bf5`)，结构化错误 (`f7813d4`)，落盘失败回滚 (`82b08e8`)；传输层开发认证 (`97b1897`) | `failed_candidate_persist_restores_store`、`valid_snapshot_and_command_journal_recover_together`、`local_host_rejects_unauthenticated_foreign_origin_and_wrong_authority` | **部分实现**；传输 token 不等于主体身份或领域授权。多数写命令仍无 CommandEnvelope/幂等键，也缺 Policy、ImpactAnalysis、CommandReceipt。 |
 | `HST-C-004` | `host_events` 保存快照更新标记与游标 (`2f399fd`) | `snapshot_and_event_cursor_must_agree` | **部分实现**；这不是领域 Event Store，无聚合序列、因果关系、Payload Digest、Outbox 或审计哈希。 |
 | `HST-R-002` | `/api/events` 与 HTTP 客户端轮询 (`2f399fd`、`0b26e04`) | 无断线/重复/乱序合同测试 | **部分实现**；客户端不持久游标，未实现游标过期、去重和原子快照重同步。 |
 | `HST-V-001` | 模拟 Run 重启后重新定时 (`fcf52bb`)，启动日志一致性校验 (`f18faf8`) | `legacy_snapshot_without_event_cursor_still_recovers`、`orphaned_command_journal_rejects_startup`、`mismatched_command_journal_rejects_startup`；无进程重启 E2E | **部分实现**；不能恢复 Worker、Wait、Handle、Outbox/Inbox 或外部副作用。 |
@@ -47,7 +47,7 @@
 ## 下一条可执行链
 
 1. `P0-009`：当前 HTTP 纵向切片已有 Schema/TS 生成和共享 Rust/HTTP 合同测试；继续补版本兼容策略、完整领域与 IPC/SQLite 边界，不宣称整体完成。
-2. `HST-C-001` / `P0-007`：本机 Host 的连接认证/来源限制；在此之前不允许接真实 Worker，也不能把宽松 CORS 当作本地安全边界。
+2. `HST-C-001` / `P0-007`：开发 HTTP 已有 token、Host/Origin 限制；继续完成受保护 IPC、用户/客户端 Session、单实例与生命周期，领域 Policy 仍独立于传输认证。在此之前不允许接真实 Worker。
 3. `CVS-C-001`、`DRF-U-001`、`REV-C-001`：持久 Graph Draft、预期版本冲突、不可变 Revision 内容和测试。
 4. `HST-C-003`、`HST-C-004`、`HST-R-002`：命令信封、事实事件、断线恢复，再推进真实 `RUN-C-001`/RunSnapshot。
 
