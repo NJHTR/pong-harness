@@ -61,7 +61,7 @@ struct EntrypointInput {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StartRunInput {
     revision: u64,
     entrypoint: String,
@@ -788,7 +788,16 @@ async fn main() {
     for (run_id, delay) in recovering_runs {
         schedule_run_completion(state.clone(), run_id, delay);
     }
-    let app = Router::new()
+    let app = router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:4317")
+        .await
+        .expect("bind host");
+    println!("pong-host listening on http://127.0.0.1:4317");
+    axum::serve(listener, app).await.expect("serve host");
+}
+
+fn router(state: AppState) -> Router {
+    Router::new()
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
         .route("/api/events", get(events))
@@ -812,17 +821,183 @@ async fn main() {
             get(list_runs).post(start_run),
         )
         .layer(CorsLayer::permissive())
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:4317")
-        .await
-        .expect("bind host");
-    println!("pong-host listening on http://127.0.0.1:4317");
-    axum::serve(listener, app).await.expect("serve host");
+        .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    fn wire_fixtures() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../packages/protocol-schema/test/fixtures/host-wire.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn host_snapshot_matches_shared_wire_fixture() {
+        let expected = wire_fixtures()["snapshot"].clone();
+        let snapshot: Snapshot = serde_json::from_value(expected.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&snapshot).unwrap(), expected);
+        let store = Store::from(snapshot);
+        let mut rebuilt = Snapshot::from(&store);
+        rebuilt.snapshot_version = 7;
+        let rebuilt = serde_json::to_value(rebuilt).unwrap();
+        for key in [
+            "workspaces",
+            "canvases",
+            "nodes",
+            "revisions",
+            "runs",
+            "notifications",
+        ] {
+            let mut expected_items = expected[key].as_array().unwrap().clone();
+            let mut rebuilt_items = rebuilt[key].as_array().unwrap().clone();
+            expected_items.sort_by_key(|item| item["id"].as_str().unwrap().to_string());
+            rebuilt_items.sort_by_key(|item| item["id"].as_str().unwrap().to_string());
+            assert_eq!(rebuilt_items, expected_items, "{key}");
+        }
+        assert_eq!(rebuilt["snapshotVersion"], expected["snapshotVersion"]);
+    }
+
+    #[test]
+    fn host_event_error_and_request_match_shared_wire_fixtures() {
+        let fixtures = wire_fixtures();
+        let event = HostEvent {
+            event_id: Uuid::parse_str(
+                fixtures["eventBatch"]["events"][0]["eventId"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+            event_type: "projection.snapshot.updated",
+            global_position: 7,
+            snapshot_version: 7,
+            occurred_at: "2026-09-24T08:00:00.000Z".to_string(),
+        };
+        let batch = EventBatch {
+            events: vec![event],
+            next_global_position: 7,
+            snapshot_version: 7,
+        };
+        assert_eq!(serde_json::to_value(batch).unwrap(), fixtures["eventBatch"]);
+
+        let error = HostError::new(
+            StatusCode::CONFLICT,
+            "REVISION_CONFLICT",
+            "The requested revision is stale",
+            false,
+        );
+        assert_eq!(serde_json::to_value(error.body).unwrap(), fixtures["error"]);
+
+        let request: StartRunInput =
+            serde_json::from_value(fixtures["startRunRequest"].clone()).unwrap();
+        assert_eq!(request.revision, 2);
+        assert_eq!(request.entrypoint, "default");
+        assert_eq!(request.idempotency_key, "run-key-1");
+        let mut extra = fixtures["startRunRequest"].clone();
+        extra["canvasId"] = serde_json::json!("path-only");
+        assert!(serde_json::from_value::<StartRunInput>(extra).is_err());
+    }
+
+    #[tokio::test]
+    async fn http_snapshot_events_and_error_match_shared_wire_fixtures() {
+        let fixtures = wire_fixtures();
+        let snapshot: Snapshot = serde_json::from_value(fixtures["snapshot"].clone()).unwrap();
+        let state = test_state(test_database());
+        *state.inner.lock().unwrap() = Store::from(snapshot);
+        *state.snapshot_version.lock().unwrap() = 7;
+        state.db.lock().unwrap().execute(
+            "INSERT INTO host_events (event_id, event_type, global_position, snapshot_version, occurred_at)
+             VALUES (?1, 'projection.snapshot.updated', 7, 7, '2026-09-24T08:00:00.000Z')",
+            params!["88888888-8888-4888-8888-888888888888"],
+        ).unwrap();
+        let app = router(state);
+
+        let snapshot_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/snapshot")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(snapshot_response.status(), StatusCode::OK);
+        let snapshot_json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(snapshot_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        for key in [
+            "workspaces",
+            "canvases",
+            "nodes",
+            "revisions",
+            "runs",
+            "notifications",
+        ] {
+            let mut actual = snapshot_json[key].as_array().unwrap().clone();
+            let mut expected = fixtures["snapshot"][key].as_array().unwrap().clone();
+            actual.sort_by_key(|item| item["id"].as_str().unwrap().to_string());
+            expected.sort_by_key(|item| item["id"].as_str().unwrap().to_string());
+            assert_eq!(actual, expected, "{key}");
+        }
+        assert_eq!(
+            snapshot_json["snapshotVersion"],
+            fixtures["snapshot"]["snapshotVersion"]
+        );
+
+        let events_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/events?afterGlobalPosition=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(events_response.status(), StatusCode::OK);
+        let events_json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(events_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(events_json, fixtures["eventBatch"]);
+
+        let canvas_id = fixtures["snapshot"]["canvases"][0]["id"].as_str().unwrap();
+        let error_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/runs"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"revision":1,"entrypoint":"default","idempotencyKey":"stale"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(error_response.status(), StatusCode::CONFLICT);
+        let error_json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(error_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(error_json, fixtures["error"]);
+    }
 
     fn test_database() -> Connection {
         open_database(PathBuf::from(":memory:")).unwrap().0

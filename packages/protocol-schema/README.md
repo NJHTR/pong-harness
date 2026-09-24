@@ -1,0 +1,7 @@
+# Local Host wire contract (0.1)
+
+`host-wire.schema.json` is the machine-readable source for the **current HTTP vertical slice**: snapshot, event batch, application error body, StartRun JSON body, and their referenced projection records. `src/host-wire.generated.ts` is generated from it. `StartRunInput.canvasId` is a client-side path parameter; the JSON body is `StartRunRequest` and must not contain `canvasId`.
+
+After editing the schema, run `pnpm --filter @seekwd/protocol-schema generate` and `pnpm --filter @seekwd/protocol-schema test`. The latter fails if generated types are stale, validates shared fixtures and rejection cases. `cargo test --workspace` checks the same fixtures against Rust serde and the actual Axum HTTP responses. The local client normalizes old mock storage entries to the explicit `null` fields required by the wire.
+
+This is **not** a complete domain Schema or a claim of wire compatibility across releases. It does not generate Rust models, SQLite tables or IPC bindings; Rust still uses serde structs with shared fixture/HTTP contract tests. Snapshot deserialization remains permissive for legacy persisted data (including an absent `snapshotVersion`), while this schema describes the current emitted HTTP shape. Axum's malformed-JSON extractor errors are not yet normalized into `HostError`. Revision and cursor numbers are Rust `u64` but JavaScript `number`; enforce a safe-integer boundary before supporting large values. Version negotiation, additive-change policy, migrations and complete Command/Event/Run/Graph contracts remain open.

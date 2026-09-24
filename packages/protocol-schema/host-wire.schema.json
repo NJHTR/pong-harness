@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://seekwd.local/schemas/host-wire-0.1.json",
+  "title": "HostWire",
+  "description": "Current local Host HTTP slice only; not the complete domain contract.",
+  "oneOf": [
+    { "$ref": "#/definitions/HostSnapshot" },
+    { "$ref": "#/definitions/HostEventBatch" },
+    { "$ref": "#/definitions/HostError" },
+    { "$ref": "#/definitions/StartRunRequest" }
+  ],
+  "definitions": {
+    "RunStatus": { "type": "string", "enum": ["idle", "queued", "running", "succeeded", "failed"] },
+    "Workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "path", "updatedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "Canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "workspaceId", "name", "status", "defaultEntrypointNodeId", "revision", "updatedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "workspaceId": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "$ref": "#/definitions/RunStatus" },
+        "defaultEntrypointNodeId": { "type": ["string", "null"] },
+        "revision": { "type": "integer", "minimum": 0 },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "CanvasNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "canvasId", "name", "kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "canvasId": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string" }
+      }
+    },
+    "CanvasRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "canvasId", "revision", "createdAt", "createdBy", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "canvasId": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string", "enum": ["user", "agent"] },
+        "status": { "type": "string", "enum": ["validated", "debug"] }
+      }
+    },
+    "Run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "canvasId", "revision", "status", "startedAt", "finishedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "canvasId": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "status": { "$ref": "#/definitions/RunStatus" },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": ["string", "null"] }
+      }
+    },
+    "Notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "message", "severity", "createdAt", "runId", "canvasId"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "severity": { "type": "string", "enum": ["info", "success", "warning", "error"] },
+        "createdAt": { "type": "string" },
+        "runId": { "type": ["string", "null"] },
+        "canvasId": { "type": ["string", "null"] }
+      }
+    },
+    "HostSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshotVersion", "workspaces", "canvases", "nodes", "revisions", "runs", "notifications"],
+      "properties": {
+        "snapshotVersion": { "type": "integer", "minimum": 0 },
+        "workspaces": { "type": "array", "items": { "$ref": "#/definitions/Workspace" } },
+        "canvases": { "type": "array", "items": { "$ref": "#/definitions/Canvas" } },
+        "nodes": { "type": "array", "items": { "$ref": "#/definitions/CanvasNode" } },
+        "revisions": { "type": "array", "items": { "$ref": "#/definitions/CanvasRevision" } },
+        "runs": { "type": "array", "items": { "$ref": "#/definitions/Run" } },
+        "notifications": { "type": "array", "items": { "$ref": "#/definitions/Notification" } }
+      }
+    },
+    "HostEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "eventType", "globalPosition", "snapshotVersion", "occurredAt"],
+      "properties": {
+        "eventId": { "type": "string" },
+        "eventType": { "type": "string", "const": "projection.snapshot.updated" },
+        "globalPosition": { "type": "integer", "minimum": 0 },
+        "snapshotVersion": { "type": "integer", "minimum": 0 },
+        "occurredAt": { "type": "string" }
+      }
+    },
+    "HostEventBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "nextGlobalPosition", "snapshotVersion"],
+      "properties": {
+        "events": { "type": "array", "items": { "$ref": "#/definitions/HostEvent" } },
+        "nextGlobalPosition": { "type": "integer", "minimum": 0 },
+        "snapshotVersion": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "HostError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "StartRunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "entrypoint", "idempotencyKey"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "entrypoint": { "type": "string", "const": "default" },
+        "idempotencyKey": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

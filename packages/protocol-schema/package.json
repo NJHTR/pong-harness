@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc -p tsconfig.json --noEmit" },
-  "devDependencies": { "typescript": "^5.9.2" }
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "check:generated": "node scripts/generate.mjs --check",
+    "test": "pnpm check:generated && node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "json-schema-to-typescript": "^16.0.0",
+    "typescript": "^5.9.2"
+  }
 }
