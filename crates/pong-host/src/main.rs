@@ -18,12 +18,16 @@ use std::{
     io,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use subtle::ConstantTimeEq;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 const HOST_AUTHORITY: &str = "127.0.0.1:4317";
+const CURRENT_DATABASE_VERSION: i64 = 1;
+const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const HOST_TABLES: [&str; 3] = ["host_state", "command_journal", "host_events"];
 
 struct InstanceLock {
     file: File,
@@ -328,6 +332,126 @@ fn invalid_persisted_state(message: impl Into<String>) -> rusqlite::Error {
     )
 }
 
+fn database_object_exists(
+    connection: &Connection,
+    object_type: &str,
+    object_name: &str,
+) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+        params![object_type, object_name],
+        |row| row.get(0),
+    )
+}
+
+fn table_sql_contains(
+    connection: &Connection,
+    table: &str,
+    fragment: &str,
+) -> rusqlite::Result<bool> {
+    let sql: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(sql.is_some_and(|sql| {
+        sql.to_ascii_lowercase()
+            .contains(&fragment.to_ascii_lowercase())
+    }))
+}
+
+fn verify_database_schema(connection: &Connection) -> rusqlite::Result<()> {
+    for table in HOST_TABLES {
+        if !database_object_exists(connection, "table", table)? {
+            return Err(invalid_persisted_state(format!(
+                "Database schema is missing required table {table}"
+            )));
+        }
+    }
+    if !database_object_exists(connection, "index", "idx_host_events_snapshot_version")? {
+        return Err(invalid_persisted_state(
+            "Database schema is missing index idx_host_events_snapshot_version",
+        ));
+    }
+    if !table_sql_contains(
+        connection,
+        "command_journal",
+        "check (length(trim(idempotency_key)) > 0)",
+    )? || !table_sql_contains(connection, "command_journal", "check (revision >= 0)")?
+        || !table_sql_contains(
+            connection,
+            "command_journal",
+            "check (entrypoint = 'default')",
+        )?
+    {
+        return Err(invalid_persisted_state(
+            "Database schema is missing command_journal integrity constraints",
+        ));
+    }
+    if !table_sql_contains(connection, "host_events", "check (global_position > 0)")?
+        || !table_sql_contains(
+            connection,
+            "host_events",
+            "check (snapshot_version = global_position)",
+        )?
+        || !table_sql_contains(
+            connection,
+            "host_events",
+            "check (event_type = 'projection.snapshot.updated')",
+        )?
+    {
+        return Err(invalid_persisted_state(
+            "Database schema is missing host_events integrity constraints",
+        ));
+    }
+    Ok(())
+}
+
+fn rebuild_command_journal(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE command_journal RENAME TO command_journal_legacy;
+         CREATE TABLE command_journal (
+           canvas_id TEXT NOT NULL,
+           idempotency_key TEXT NOT NULL,
+           run_id TEXT NOT NULL,
+           revision INTEGER NOT NULL,
+           entrypoint TEXT NOT NULL,
+           PRIMARY KEY (canvas_id, idempotency_key),
+           CHECK (length(trim(idempotency_key)) > 0),
+           CHECK (revision >= 0),
+           CHECK (entrypoint = 'default')
+         );
+         INSERT INTO command_journal (canvas_id, idempotency_key, run_id, revision, entrypoint)
+           SELECT canvas_id, idempotency_key, run_id, revision, entrypoint
+           FROM command_journal_legacy;
+         DROP TABLE command_journal_legacy;",
+    )
+}
+
+fn rebuild_host_events(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE host_events RENAME TO host_events_legacy;
+         CREATE TABLE host_events (
+           global_position INTEGER PRIMARY KEY,
+           event_id TEXT NOT NULL UNIQUE,
+           event_type TEXT NOT NULL,
+           snapshot_version INTEGER NOT NULL,
+           occurred_at TEXT NOT NULL,
+           CHECK (global_position > 0),
+           CHECK (snapshot_version = global_position),
+           CHECK (event_type = 'projection.snapshot.updated')
+         );
+         INSERT INTO host_events (global_position, event_id, event_type, snapshot_version, occurred_at)
+           SELECT global_position, event_id, event_type, snapshot_version, occurred_at
+           FROM host_events_legacy;
+         DROP TABLE host_events_legacy;
+         CREATE INDEX idx_host_events_snapshot_version
+           ON host_events(snapshot_version);",
+    )
+}
+
 impl From<Snapshot> for Store {
     fn from(snapshot: Snapshot) -> Self {
         Self {
@@ -408,32 +532,117 @@ impl AppState {
                 params![canvas_id.to_string(), key, run_id.to_string(), run.revision as i64, "default"],
             )?;
         }
+        let foreign_key_violations: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        if foreign_key_violations != 0 {
+            return Err(invalid_persisted_state(
+                "Database contains foreign key violations after persistence",
+            ));
+        }
         transaction.commit()?;
         *version = next_version;
         Ok(())
     }
 }
 
-fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store, u64)> {
-    let connection = Connection::open(path)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS host_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot_json TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS command_journal (
+fn initialize_database(connection: &mut Connection, file_backed: bool) -> rusqlite::Result<()> {
+    connection.busy_timeout(DATABASE_BUSY_TIMEOUT)?;
+    connection.pragma_update(None, "foreign_keys", true)?;
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
+    if file_backed {
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+    }
+
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version > CURRENT_DATABASE_VERSION {
+        return Err(invalid_persisted_state(format!(
+            "Database schema version {version} is newer than supported version {CURRENT_DATABASE_VERSION}"
+        )));
+    }
+    let mut statement = connection.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )?;
+    let existing_tables = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    if !existing_tables.is_empty()
+        && !HOST_TABLES
+            .iter()
+            .all(|expected| existing_tables.iter().any(|actual| actual == expected))
+    {
+        return Err(invalid_persisted_state(
+            "Host database has a partial schema; refusing to initialize it",
+        ));
+    }
+
+    let transaction = connection.transaction()?;
+    if version == 0 {
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS host_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot_json TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS command_journal (
            canvas_id TEXT NOT NULL,
            idempotency_key TEXT NOT NULL,
            run_id TEXT NOT NULL,
            revision INTEGER NOT NULL,
            entrypoint TEXT NOT NULL,
-           PRIMARY KEY (canvas_id, idempotency_key)
-         );
-         CREATE TABLE IF NOT EXISTS host_events (
+           PRIMARY KEY (canvas_id, idempotency_key),
+           CHECK (length(trim(idempotency_key)) > 0),
+           CHECK (revision >= 0),
+           CHECK (entrypoint = 'default')
+             );
+             CREATE TABLE IF NOT EXISTS host_events (
            global_position INTEGER PRIMARY KEY,
            event_id TEXT NOT NULL UNIQUE,
            event_type TEXT NOT NULL,
            snapshot_version INTEGER NOT NULL,
-           occurred_at TEXT NOT NULL
-         );",
-    )?;
+           occurred_at TEXT NOT NULL,
+           CHECK (global_position > 0),
+           CHECK (snapshot_version = global_position),
+           CHECK (event_type = 'projection.snapshot.updated')
+             );",
+        )?;
+        if !table_sql_contains(
+            &transaction,
+            "command_journal",
+            "check (length(trim(idempotency_key)) > 0)",
+        )? {
+            rebuild_command_journal(&transaction)?;
+        }
+        if !table_sql_contains(
+            &transaction,
+            "host_events",
+            "check (event_type = 'projection.snapshot.updated')",
+        )? {
+            rebuild_host_events(&transaction)?;
+        }
+        transaction.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_host_events_snapshot_version
+               ON host_events(snapshot_version);
+             PRAGMA user_version = 1;",
+        )?;
+    }
+    transaction.commit()?;
+
+    verify_database_schema(connection)?;
+    let violations: i64 =
+        connection.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+    if violations != 0 {
+        return Err(invalid_persisted_state(
+            "Database contains foreign key violations",
+        ));
+    }
+    Ok(())
+}
+
+fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store, u64)> {
+    let file_backed = path != PathBuf::from(":memory:");
+    let mut connection = Connection::open(path)?;
+    initialize_database(&mut connection, file_backed)?;
     let (store, snapshot_version) = load_persisted_state(&connection)?;
     Ok((connection, store, snapshot_version))
 }
@@ -1509,6 +1718,201 @@ mod tests {
             db: Arc::new(Mutex::new(connection)),
             snapshot_version: Arc::new(Mutex::new(0)),
         }
+    }
+
+    fn temporary_database_path(label: &str) -> PathBuf {
+        env::temp_dir().join(format!("seekwd-{label}-{}.sqlite3", Uuid::new_v4()))
+    }
+
+    fn remove_database_files(path: &PathBuf) {
+        for suffix in ["", "-wal", "-shm", ".lock"] {
+            let candidate = PathBuf::from(format!("{}{suffix}", path.display()));
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+
+    #[test]
+    fn file_database_initializes_wal_version_pragmas_and_index() {
+        let path = temporary_database_path("init");
+        let (connection, _, _) = open_database(path.clone()).unwrap();
+
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            CURRENT_DATABASE_VERSION
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+                .unwrap()
+                .to_ascii_lowercase(),
+            "wal"
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "foreign_keys", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(
+            database_object_exists(&connection, "index", "idx_host_events_snapshot_version")
+                .unwrap()
+        );
+        drop(connection);
+        remove_database_files(&path);
+    }
+
+    #[test]
+    fn newer_schema_version_is_rejected_without_downgrade() {
+        let path = temporary_database_path("newer");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "user_version", CURRENT_DATABASE_VERSION + 1)
+            .unwrap();
+        drop(connection);
+
+        let error = open_database(path.clone()).err().unwrap();
+
+        assert!(error.to_string().contains("newer than supported"));
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            CURRENT_DATABASE_VERSION + 1
+        );
+        drop(connection);
+        remove_database_files(&path);
+    }
+
+    #[test]
+    fn partial_unversioned_database_is_rejected_without_initializing_remaining_tables() {
+        let path = temporary_database_path("partial");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE host_state (id INTEGER PRIMARY KEY, snapshot_json TEXT NOT NULL);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = open_database(path.clone()).err().unwrap();
+
+        assert!(error.to_string().contains("partial schema"));
+        let connection = Connection::open(&path).unwrap();
+        assert!(!database_object_exists(&connection, "table", "command_journal").unwrap());
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        drop(connection);
+        remove_database_files(&path);
+    }
+
+    #[test]
+    fn legacy_unversioned_database_migrates_preserving_rows_and_constraints() {
+        let path = temporary_database_path("legacy");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE host_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot_json TEXT NOT NULL);
+                 CREATE TABLE command_journal (
+                   canvas_id TEXT NOT NULL,
+                   idempotency_key TEXT NOT NULL,
+                   run_id TEXT NOT NULL,
+                   revision INTEGER NOT NULL,
+                   entrypoint TEXT NOT NULL,
+                   PRIMARY KEY (canvas_id, idempotency_key)
+                 );
+                 CREATE TABLE host_events (
+                   global_position INTEGER PRIMARY KEY,
+                   event_id TEXT NOT NULL UNIQUE,
+                   event_type TEXT NOT NULL,
+                   snapshot_version INTEGER NOT NULL,
+                   occurred_at TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+        let canvas_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let mut run_store = Store::default();
+        run_store.runs.insert(
+            run_id,
+            Run {
+                id: run_id,
+                canvas_id,
+                revision: 0,
+                status: RunStatus::Succeeded,
+                started_at: now(),
+                finished_at: Some(now()),
+            },
+        );
+        let mut snapshot = Snapshot::from(&run_store);
+        snapshot.snapshot_version = 1;
+        connection
+            .execute(
+                "INSERT INTO command_journal (canvas_id, idempotency_key, run_id, revision, entrypoint) VALUES (?1, 'key', ?2, 0, 'default')",
+                params![canvas_id.to_string(), run_id.to_string()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO host_events (global_position, event_id, event_type, snapshot_version, occurred_at) VALUES (1, 'event', 'projection.snapshot.updated', 1, 'now')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO host_state (id, snapshot_json) VALUES (1, ?1)",
+                params![serde_json::to_string(&snapshot).unwrap()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let (connection, _, _) = open_database(path.clone()).unwrap();
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            CURRENT_DATABASE_VERSION
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM command_journal WHERE idempotency_key = 'key'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM host_events WHERE event_id = 'event'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(connection
+            .execute(
+                "INSERT INTO command_journal (canvas_id, idempotency_key, run_id, revision, entrypoint) VALUES (?1, '', ?2, 0, 'default')",
+                params![Uuid::new_v4().to_string(), Uuid::new_v4().to_string()],
+            )
+            .is_err());
+        assert!(connection
+            .execute(
+                "INSERT INTO host_events (global_position, event_id, event_type, snapshot_version, occurred_at) VALUES (2, 'bad-event', 'unknown', 2, 'now')",
+                [],
+            )
+            .is_err());
+        drop(connection);
+        remove_database_files(&path);
     }
 
     #[test]
