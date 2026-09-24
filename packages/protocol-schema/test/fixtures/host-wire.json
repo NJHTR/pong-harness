@@ -17,6 +17,8 @@
         "status": "running",
         "defaultEntrypointNodeId": "33333333-3333-4333-8333-333333333333",
         "revision": 2,
+        "draftRevision": 1,
+        "draftDirty": false,
         "updatedAt": "2026-09-24T08:00:00.000Z"
       }
     ],
@@ -35,7 +37,9 @@
         "revision": 2,
         "createdAt": "2026-09-24T08:00:00.000Z",
         "createdBy": "user",
-        "status": "debug"
+        "status": "debug",
+        "contentDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "graphJson": "{\"nodes\":[],\"edges\":[]}"
       }
     ],
     "runs": [

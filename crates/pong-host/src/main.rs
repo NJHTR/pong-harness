@@ -10,6 +10,7 @@ use fs2::FileExt;
 use pong_core::{Canvas, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env,
@@ -191,6 +192,13 @@ struct StartRunInput {
     revision: u64,
     entrypoint: String,
     idempotency_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SaveRevisionInput {
+    #[serde(default)]
+    expected_draft_revision: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -504,6 +512,26 @@ fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+fn graph_json_for_canvas(store: &Store, canvas_id: Uuid) -> String {
+    let mut nodes = store
+        .nodes
+        .values()
+        .filter(|node| node.canvas_id == canvas_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    nodes.sort_by_key(|node| node.id);
+    serde_json::json!({
+        "nodes": nodes,
+        "edges": []
+    })
+    .to_string()
+}
+
+fn sha256_digest(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
 async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspace>> {
     Json(
         state
@@ -643,6 +671,8 @@ async fn create_canvas(
         status: RunStatus::Idle,
         default_entrypoint_node_id: None,
         revision: 0,
+        draft_revision: 0,
+        draft_dirty: false,
         updated_at: now(),
     };
     let start_node = CanvasNode {
@@ -704,6 +734,8 @@ async fn set_default_entrypoint(
         ));
     }
     canvas.default_entrypoint_node_id = Some(input.node_id);
+    canvas.draft_revision = canvas.draft_revision.saturating_add(1);
+    canvas.draft_dirty = true;
     canvas.updated_at = now();
     let result = canvas.clone();
     persist_candidate(&state, &mut store, previous)?;
@@ -713,14 +745,27 @@ async fn set_default_entrypoint(
 async fn save_revision(
     State(state): State<AppState>,
     Path(canvas_id): Path<Uuid>,
+    Json(input): Json<SaveRevisionInput>,
 ) -> Result<(StatusCode, Json<CanvasRevision>), HostError> {
     let mut store = state.inner.lock().unwrap();
     let previous = store.clone();
+    let graph_json = graph_json_for_canvas(&store, canvas_id);
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
         .ok_or_else(|| not_found_error("Canvas was not found"))?;
+    if let Some(expected) = input.expected_draft_revision
+        && expected != canvas.draft_revision
+    {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "DRAFT_REVISION_CONFLICT",
+            "The requested draft revision is stale",
+            false,
+        ));
+    }
     canvas.revision += 1;
+    canvas.draft_dirty = false;
     canvas.updated_at = now();
     let revision = CanvasRevision {
         id: Uuid::new_v4(),
@@ -729,6 +774,8 @@ async fn save_revision(
         created_at: now(),
         created_by: "user".to_string(),
         status: "debug".to_string(),
+        content_digest: sha256_digest(&graph_json),
+        graph_json,
     };
     store.revisions.insert(revision.id, revision.clone());
     persist_candidate(&state, &mut store, previous)?;
@@ -1082,6 +1129,145 @@ mod tests {
         let mut extra = fixtures["startRunRequest"].clone();
         extra["canvasId"] = serde_json::json!("path-only");
         assert!(serde_json::from_value::<StartRunInput>(extra).is_err());
+    }
+
+    #[test]
+    fn legacy_snapshot_defaults_draft_and_revision_content_fields() {
+        let legacy = serde_json::json!({
+            "snapshotVersion": 0,
+            "workspaces": [],
+            "canvases": [{
+                "id": Uuid::new_v4(),
+                "workspaceId": Uuid::new_v4(),
+                "name": "Legacy",
+                "status": "idle",
+                "defaultEntrypointNodeId": null,
+                "revision": 0,
+                "updatedAt": now()
+            }],
+            "nodes": [],
+            "revisions": [{
+                "id": Uuid::new_v4(),
+                "canvasId": Uuid::new_v4(),
+                "revision": 1,
+                "createdAt": now(),
+                "createdBy": "user",
+                "status": "debug"
+            }],
+            "runs": [],
+            "notifications": []
+        });
+        let snapshot: Snapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(snapshot.canvases[0].draft_revision, 0);
+        assert!(!snapshot.canvases[0].draft_dirty);
+        assert_eq!(
+            snapshot.revisions[0].content_digest,
+            format!("sha256:{}", "0".repeat(64))
+        );
+        assert_eq!(
+            snapshot.revisions[0].graph_json,
+            r#"{"nodes":[],"edges":[]}"#
+        );
+    }
+
+    #[test]
+    fn graph_digest_is_stable_for_node_order() {
+        let canvas_id = Uuid::new_v4();
+        let first_id = Uuid::new_v4();
+        let second_id = Uuid::new_v4();
+        let node = |id| CanvasNode {
+            id,
+            canvas_id,
+            name: "node".to_string(),
+            kind: "agent.task".to_string(),
+        };
+        let mut left = Store::default();
+        left.nodes.insert(first_id, node(first_id));
+        left.nodes.insert(second_id, node(second_id));
+        let mut right = Store::default();
+        right.nodes.insert(second_id, node(second_id));
+        right.nodes.insert(first_id, node(first_id));
+        let left_json = graph_json_for_canvas(&left, canvas_id);
+        let right_json = graph_json_for_canvas(&right, canvas_id);
+        assert_eq!(left_json, right_json);
+        assert_eq!(sha256_digest(&left_json), sha256_digest(&right_json));
+    }
+
+    #[tokio::test]
+    async fn save_revision_requires_current_draft_revision_and_freezes_digest() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let canvas = Canvas {
+            id: canvas_id,
+            workspace_id,
+            name: "Draft".to_string(),
+            status: RunStatus::Idle,
+            default_entrypoint_node_id: Some(node_id),
+            revision: 0,
+            draft_revision: 1,
+            draft_dirty: true,
+            updated_at: now(),
+        };
+        let node = CanvasNode {
+            id: node_id,
+            canvas_id,
+            name: "Start".to_string(),
+            kind: "trigger.start".to_string(),
+        };
+        {
+            let mut store = state.inner.lock().unwrap();
+            store.canvases.insert(canvas_id, canvas);
+            store.nodes.insert(node_id, node);
+        }
+        let app = router(state.clone(), test_security());
+        let stale = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/revisions"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"expectedDraftRevision":0}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(stale.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["code"], "DRAFT_REVISION_CONFLICT");
+
+        let saved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/revisions"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"expectedDraftRevision":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::CREATED);
+        let revision: CanvasRevision =
+            serde_json::from_slice(&to_bytes(saved.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(revision.content_digest.starts_with("sha256:"));
+        assert!(revision.graph_json.contains("trigger.start"));
+        assert_eq!(revision.content_digest, sha256_digest(&revision.graph_json));
+        let state_snapshot = state.inner.lock().unwrap();
+        let updated_canvas = state_snapshot.canvases.get(&canvas_id).unwrap();
+        assert_eq!(updated_canvas.revision, 1);
+        assert!(!updated_canvas.draft_dirty);
+        assert_eq!(state_snapshot.revisions.len(), 1);
     }
 
     #[tokio::test]

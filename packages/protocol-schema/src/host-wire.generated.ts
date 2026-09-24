@@ -3,7 +3,7 @@
 /**
  * Current local Host HTTP slice only; not the complete domain contract.
  */
-export type HostWire = HostSnapshot | HostEventBatch | HostError | StartRunRequest;
+export type HostWire = HostSnapshot | HostEventBatch | HostError | StartRunRequest | SaveRevisionRequest;
 export type RunStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
 
 export interface HostSnapshot {
@@ -28,6 +28,8 @@ export interface Canvas {
   status: RunStatus;
   defaultEntrypointNodeId: string | null;
   revision: number;
+  draftRevision: number;
+  draftDirty: boolean;
   updatedAt: string;
 }
 export interface CanvasNode {
@@ -43,6 +45,8 @@ export interface CanvasRevision {
   createdAt: string;
   createdBy: "user" | "agent";
   status: "validated" | "debug";
+  contentDigest: string;
+  graphJson: string;
 }
 export interface Run {
   id: string;
@@ -82,4 +86,7 @@ export interface StartRunRequest {
   revision: number;
   entrypoint: "default";
   idempotencyKey: string;
+}
+export interface SaveRevisionRequest {
+  expectedDraftRevision?: number;
 }

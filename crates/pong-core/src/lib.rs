@@ -21,6 +21,10 @@ pub struct Canvas {
     pub status: RunStatus,
     pub default_entrypoint_node_id: Option<Id>,
     pub revision: u64,
+    #[serde(default)]
+    pub draft_revision: u64,
+    #[serde(default)]
+    pub draft_dirty: bool,
     pub updated_at: String,
 }
 
@@ -63,6 +67,18 @@ pub struct CanvasRevision {
     pub created_at: String,
     pub created_by: String,
     pub status: String,
+    #[serde(default = "legacy_digest")]
+    pub content_digest: String,
+    #[serde(default = "legacy_graph")]
+    pub graph_json: String,
+}
+
+fn legacy_digest() -> String {
+    "sha256:".to_string() + &"0".repeat(64)
+}
+
+fn legacy_graph() -> String {
+    r#"{"nodes":[],"edges":[]}"#.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

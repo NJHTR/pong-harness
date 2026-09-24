@@ -7,7 +7,8 @@
     { "$ref": "#/definitions/HostSnapshot" },
     { "$ref": "#/definitions/HostEventBatch" },
     { "$ref": "#/definitions/HostError" },
-    { "$ref": "#/definitions/StartRunRequest" }
+    { "$ref": "#/definitions/StartRunRequest" },
+    { "$ref": "#/definitions/SaveRevisionRequest" }
   ],
   "definitions": {
     "RunStatus": { "type": "string", "enum": ["idle", "queued", "running", "succeeded", "failed"] },
@@ -25,7 +26,7 @@
     "Canvas": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "workspaceId", "name", "status", "defaultEntrypointNodeId", "revision", "updatedAt"],
+      "required": ["id", "workspaceId", "name", "status", "defaultEntrypointNodeId", "revision", "draftRevision", "draftDirty", "updatedAt"],
       "properties": {
         "id": { "type": "string" },
         "workspaceId": { "type": "string" },
@@ -33,6 +34,8 @@
         "status": { "$ref": "#/definitions/RunStatus" },
         "defaultEntrypointNodeId": { "type": ["string", "null"] },
         "revision": { "type": "integer", "minimum": 0 },
+        "draftRevision": { "type": "integer", "minimum": 0 },
+        "draftDirty": { "type": "boolean" },
         "updatedAt": { "type": "string" }
       }
     },
@@ -50,14 +53,16 @@
     "CanvasRevision": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "canvasId", "revision", "createdAt", "createdBy", "status"],
+      "required": ["id", "canvasId", "revision", "createdAt", "createdBy", "status", "contentDigest", "graphJson"],
       "properties": {
         "id": { "type": "string" },
         "canvasId": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
         "createdAt": { "type": "string" },
         "createdBy": { "type": "string", "enum": ["user", "agent"] },
-        "status": { "type": "string", "enum": ["validated", "debug"] }
+        "status": { "type": "string", "enum": ["validated", "debug"] },
+        "contentDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "graphJson": { "type": "string", "minLength": 2 }
       }
     },
     "Run": {
@@ -141,6 +146,13 @@
         "revision": { "type": "integer", "minimum": 0 },
         "entrypoint": { "type": "string", "const": "default" },
         "idempotencyKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "SaveRevisionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expectedDraftRevision": { "type": "integer", "minimum": 0 }
       }
     }
   }
