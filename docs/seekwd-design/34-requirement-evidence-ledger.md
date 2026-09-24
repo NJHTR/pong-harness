@@ -24,7 +24,7 @@
 
 | 需求 ID | 实现与提交证据 | 自动化证据 | 当前判断 / 完整验收缺口 |
 |---|---|---|---|
-| `P0-009` | `packages/protocol-schema/src/index.ts` (`5b5ee83`)，`crates/pong-core/src/lib.rs` (`d0d75fb`) | 仅 TS typecheck / Rust 编译 | **部分实现**；两套手写模型，没有统一 Schema 生成、版本兼容或跨语言合同测试。下一项基础工作。 |
+| `P0-009` | `packages/protocol-schema/host-wire.schema.json`、生成器与 `src/host-wire.generated.ts`；Rust serde 位于 `crates/pong-core/src/lib.rs` 和 `crates/pong-host/src/main.rs`；`752a18e` | `pnpm --filter @seekwd/protocol-schema test`（3 个共享样本/负例测试）；`cargo test --workspace`（13 个 Host 测试，含 `host_snapshot_matches_shared_wire_fixture`、`host_event_error_and_request_match_shared_wire_fixtures`、`http_snapshot_events_and_error_match_shared_wire_fixtures`）；`cargo fmt --all -- --check`、`pnpm -r typecheck`、`pnpm -r build`、`pnpm check:requirements`、`git diff --check` 通过（2026-09-24） | **部分实现**；当前 Host HTTP 切片已有单一 JSON Schema 生成 TS 类型、Rust serde/HTTP 跨语言样本验证，修正 `null`/请求路径边界。完整领域、Rust/SQLite/IPC 生成、版本兼容、JSON extractor 错误归一化及安全整数边界尚未完成。详见 `packages/protocol-schema/README.md`。 |
 | `P0-010` | 本台账与矩阵稳定 ID；基线校准 `b7d5d75`；`scripts/check-requirement-ledger.mjs` | `pnpm check:requirements` 仅校验 ID 存在与唯一并报告覆盖数 | **部分实现**；历史提交开始回填，仍无逐项 Issue/PR、测试结果归档或全需求证据覆盖。 |
 | `P0-029` | `Cargo.toml`、`crates/pong-core`、`crates/pong-host` (`d0d75fb`) | `cargo check --workspace` | **部分实现**；已选择并创建本地 Rust 核心，但 Runtime/Policy/Worker 等 crate 尚不存在。 |
 | `HST-C-001` | `crates/pong-host/src/main.rs` 的本机监听与健康查询 (`d0d75fb`) | 编译通过；无进程生命周期合同测试 | **部分实现**；缺单实例锁、认证入口、优雅关闭和崩溃后健康验收。 |
@@ -46,7 +46,7 @@
 
 ## 下一条可执行链
 
-1. `P0-009`：冻结当前纵向切片的单一 Schema 来源和 Rust/TS/HTTP 合同测试。先保护已有数据格式与错误响应，不宣称完整领域 Schema。
+1. `P0-009`：当前 HTTP 纵向切片已有 Schema/TS 生成和共享 Rust/HTTP 合同测试；继续补版本兼容策略、完整领域与 IPC/SQLite 边界，不宣称整体完成。
 2. `HST-C-001` / `P0-007`：本机 Host 的连接认证/来源限制；在此之前不允许接真实 Worker，也不能把宽松 CORS 当作本地安全边界。
 3. `CVS-C-001`、`DRF-U-001`、`REV-C-001`：持久 Graph Draft、预期版本冲突、不可变 Revision 内容和测试。
 4. `HST-C-003`、`HST-C-004`、`HST-R-002`：命令信封、事实事件、断线恢复，再推进真实 `RUN-C-001`/RunSnapshot。

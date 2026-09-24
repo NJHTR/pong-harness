@@ -102,7 +102,7 @@
 
 | 需求范围 | 已有证据 | 尚未达到的验收 |
 |---|---|---|
-| `P0-009`、`P0-010` | TS Host 类型、Rust 简化模型及本文稳定需求 ID 已存在；已核对条目见[证据台账](34-requirement-evidence-ledger.md) | 尚无跨语言 Schema 生成/合同测试；追踪只覆盖当前纵向切片，未覆盖全部需求及 Issue/PR |
+| `P0-009`、`P0-010` | 当前 Host HTTP 切片已有 JSON Schema 生成 TS 类型、Rust serde/HTTP 共享样本合同测试；稳定需求 ID 已存在；已核对条目见[证据台账](34-requirement-evidence-ledger.md) | 完整领域、Rust/SQLite/IPC 生成和版本兼容未完成；追踪只覆盖当前纵向切片，未覆盖全部需求及 Issue/PR |
 | `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动，SQLite 快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无单实例锁、WAL/迁移、Worker/Wait/Handle 恢复或完整崩溃演练 |
 | `HST-R-001`、`HST-C-003`、`HST-C-004`、`HST-R-002` | 部分 Query/Command HTTP 路由、`StartRun` 幂等键、快照版本和快照更新事件游标 | 无认证/授权、完整 Command/Event Envelope、Outbox/Inbox、事件重放及游标过期重同步 |
 | `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、简化 Revision 元数据可持久化 | 未做目录预检、CanvasDraft/Graph 持久化、不可变 Revision 内容、Release、影响分析与恢复 |
@@ -123,7 +123,7 @@
 | P0-006 | 合同治理 | RunPatch | 冻结运行中只可修改未来节点，禁止改写历史输入、输出、证据和审批。 | 95% | W1 | RT/AG/QA | 需要合同测试和 RunBranch 模型。 |
 | P0-007 | 合同治理 | 权限边界 | 冻结默认 deny、AuthorityProfile、Budget、Network、Secret、Export 和后台运行边界。 | 90% | W1 | SEC/BE | 需补齐资源规范化算法和 Policy Decision Schema。 |
 | P0-008 | 合同治理 | 事件恢复 | 冻结 CommandEnvelope、EventEnvelope、Cursor、Snapshot、Outbox/Inbox 和至少一次投递规则。 | 85% | W1 | BE/RT | 设计存在，代码和测试未落地。 |
-| P0-009 | 项目基线 | 机器可读 Schema | 生成 TypeScript/Rust/SQLite/IPC 共用 Schema，禁止各模块自行猜字段。 | 10% | W1 | BE/QA | 当前只有文档和部分 TS 类型。 |
+| P0-009 | 项目基线 | 机器可读 Schema | 生成 TypeScript/Rust/SQLite/IPC 共用 Schema，禁止各模块自行猜字段。 | 10% | W1 | BE/QA | 当前 Host HTTP 切片有 JSON Schema 生成 TS 类型及 Rust/HTTP 合同测试；Rust/SQLite/IPC 生成和完整领域仍缺，百分比为历史估算而非验收。 |
 | P0-010 | 项目基线 | 需求追踪 | 将本文任务 ID 与 Issue、PR、测试、验收证据关联。 | 0% | W1 | PM/QA | 本文作为追踪源；需接入项目管理工具。 |
 | P0-011 | 架构建模 | 系统平面 | 将 Experience、Control、Execution、Data、Intelligence、Governance 六个平面落实为职责边界和依赖图。 | 35% | W1 | PM/BE/RT/FE | 已有流程模型；需通过模块评审冻结。 |
 | P0-012 | 架构建模 | 业务域与事实所有权 | 为 Workspace、Graph、Runtime、Policy、Execution、Artifact、Automation、Extension、Agent、Recovery 和 Projection 指定唯一事实所有者。 | 30% | W1 | PM/BE/RT/SEC | 已补充服务所有权表；需转成接口和合同测试。 |
