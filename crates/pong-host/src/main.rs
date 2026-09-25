@@ -7,7 +7,9 @@ use axum::{
     routing::{get, patch, post},
 };
 use fs2::FileExt;
-use pong_core::{Canvas, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace};
+use pong_core::{
+    Canvas, CanvasEdge, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -159,6 +161,7 @@ struct Store {
     workspaces: HashMap<Uuid, Workspace>,
     canvases: HashMap<Uuid, Canvas>,
     nodes: HashMap<Uuid, CanvasNode>,
+    edges: HashMap<Uuid, CanvasEdge>,
     revisions: HashMap<Uuid, CanvasRevision>,
     runs: HashMap<Uuid, Run>,
     notifications: HashMap<Uuid, Notification>,
@@ -177,6 +180,20 @@ struct CreateWorkspace {
 struct CreateCanvas {
     workspace_id: Uuid,
     name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateNodeInput {
+    name: String,
+    kind: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateEdgeInput {
+    source_node_id: Uuid,
+    target_node_id: Uuid,
 }
 
 #[derive(Deserialize)]
@@ -285,6 +302,8 @@ struct Snapshot {
     workspaces: Vec<Workspace>,
     canvases: Vec<Canvas>,
     nodes: Vec<CanvasNode>,
+    #[serde(default)]
+    edges: Vec<CanvasEdge>,
     revisions: Vec<CanvasRevision>,
     runs: Vec<Run>,
     notifications: Vec<Notification>,
@@ -470,6 +489,11 @@ impl From<Snapshot> for Store {
                 .into_iter()
                 .map(|item| (item.id, item))
                 .collect(),
+            edges: snapshot
+                .edges
+                .into_iter()
+                .map(|item| (item.id, item))
+                .collect(),
             revisions: snapshot
                 .revisions
                 .into_iter()
@@ -497,6 +521,7 @@ impl From<&Store> for Snapshot {
             workspaces: store.workspaces.values().cloned().collect(),
             canvases: store.canvases.values().cloned().collect(),
             nodes: store.nodes.values().cloned().collect(),
+            edges: store.edges.values().cloned().collect(),
             revisions: store.revisions.values().cloned().collect(),
             runs: store.runs.values().cloned().collect(),
             notifications: store.notifications.values().cloned().collect(),
@@ -729,11 +754,29 @@ fn graph_json_for_canvas(store: &Store, canvas_id: Uuid) -> String {
         .cloned()
         .collect::<Vec<_>>();
     nodes.sort_by_key(|node| node.id);
+    let mut edges = store
+        .edges
+        .values()
+        .filter(|edge| edge.canvas_id == canvas_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    edges.sort_by_key(|edge| edge.id);
     serde_json::json!({
         "nodes": nodes,
-        "edges": []
+        "edges": edges
     })
     .to_string()
+}
+
+fn mark_canvas_dirty(store: &mut Store, canvas_id: Uuid) -> Result<(), HostError> {
+    let canvas = store
+        .canvases
+        .get_mut(&canvas_id)
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
+    canvas.draft_revision = canvas.draft_revision.saturating_add(1);
+    canvas.draft_dirty = true;
+    canvas.updated_at = now();
+    Ok(())
 }
 
 fn sha256_digest(content: &str) -> String {
@@ -898,6 +941,83 @@ async fn create_canvas(
     store.nodes.insert(start_node.id, start_node);
     persist_candidate(&state, &mut store, previous)?;
     Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn create_node(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<Uuid>,
+    Json(input): Json<CreateNodeInput>,
+) -> Result<(StatusCode, Json<CanvasNode>), HostError> {
+    let name = input.name.trim();
+    let kind = input.kind.trim();
+    if name.is_empty() || kind.is_empty() {
+        return Err(invalid_input_error("Node name and kind are required"));
+    }
+    let mut store = state.inner.lock().unwrap();
+    if !store.canvases.contains_key(&canvas_id) {
+        return Err(not_found_error("Canvas was not found"));
+    }
+    let node = CanvasNode {
+        id: Uuid::new_v4(),
+        canvas_id,
+        name: name.to_string(),
+        kind: kind.to_string(),
+    };
+    let previous = store.clone();
+    store.nodes.insert(node.id, node.clone());
+    mark_canvas_dirty(&mut store, canvas_id)?;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok((StatusCode::CREATED, Json(node)))
+}
+
+async fn create_edge(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<Uuid>,
+    Json(input): Json<CreateEdgeInput>,
+) -> Result<(StatusCode, Json<CanvasEdge>), HostError> {
+    if input.source_node_id == input.target_node_id {
+        return Err(invalid_input_error("A node cannot connect to itself"));
+    }
+    let mut store = state.inner.lock().unwrap();
+    if !store.canvases.contains_key(&canvas_id) {
+        return Err(not_found_error("Canvas was not found"));
+    }
+    let nodes_belong = [input.source_node_id, input.target_node_id]
+        .into_iter()
+        .all(|node_id| {
+            store
+                .nodes
+                .get(&node_id)
+                .is_some_and(|node| node.canvas_id == canvas_id)
+        });
+    if !nodes_belong {
+        return Err(invalid_input_error(
+            "Both edge endpoints must belong to the canvas",
+        ));
+    }
+    if store.edges.values().any(|edge| {
+        edge.canvas_id == canvas_id
+            && edge.source_node_id == input.source_node_id
+            && edge.target_node_id == input.target_node_id
+    }) {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "EDGE_ALREADY_EXISTS",
+            "This edge already exists",
+            false,
+        ));
+    }
+    let edge = CanvasEdge {
+        id: Uuid::new_v4(),
+        canvas_id,
+        source_node_id: input.source_node_id,
+        target_node_id: input.target_node_id,
+    };
+    let previous = store.clone();
+    store.edges.insert(edge.id, edge.clone());
+    mark_canvas_dirty(&mut store, canvas_id)?;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok((StatusCode::CREATED, Json(edge)))
 }
 
 async fn rename_canvas(
@@ -1205,6 +1325,8 @@ fn router(state: AppState, security: SecurityConfig) -> Router {
             "/api/workspaces/{workspace_id}/canvases",
             get(list_canvases).post(create_canvas),
         )
+        .route("/api/canvases/{canvas_id}/nodes", post(create_node))
+        .route("/api/canvases/{canvas_id}/edges", post(create_edge))
         .route("/api/canvases/{canvas_id}/revisions", post(save_revision))
         .route("/api/canvases/{canvas_id}", patch(rename_canvas))
         .route(
@@ -1287,6 +1409,7 @@ mod tests {
             "workspaces",
             "canvases",
             "nodes",
+            "edges",
             "revisions",
             "runs",
             "notifications",
@@ -1384,6 +1507,8 @@ mod tests {
         let canvas_id = Uuid::new_v4();
         let first_id = Uuid::new_v4();
         let second_id = Uuid::new_v4();
+        let first_edge_id = Uuid::new_v4();
+        let second_edge_id = Uuid::new_v4();
         let node = |id| CanvasNode {
             id,
             canvas_id,
@@ -1393,9 +1518,45 @@ mod tests {
         let mut left = Store::default();
         left.nodes.insert(first_id, node(first_id));
         left.nodes.insert(second_id, node(second_id));
+        left.edges.insert(
+            first_edge_id,
+            CanvasEdge {
+                id: first_edge_id,
+                canvas_id,
+                source_node_id: first_id,
+                target_node_id: second_id,
+            },
+        );
+        left.edges.insert(
+            second_edge_id,
+            CanvasEdge {
+                id: second_edge_id,
+                canvas_id,
+                source_node_id: second_id,
+                target_node_id: first_id,
+            },
+        );
         let mut right = Store::default();
         right.nodes.insert(second_id, node(second_id));
         right.nodes.insert(first_id, node(first_id));
+        right.edges.insert(
+            second_edge_id,
+            CanvasEdge {
+                id: second_edge_id,
+                canvas_id,
+                source_node_id: second_id,
+                target_node_id: first_id,
+            },
+        );
+        right.edges.insert(
+            first_edge_id,
+            CanvasEdge {
+                id: first_edge_id,
+                canvas_id,
+                source_node_id: first_id,
+                target_node_id: second_id,
+            },
+        );
         let left_json = graph_json_for_canvas(&left, canvas_id);
         let right_json = graph_json_for_canvas(&right, canvas_id);
         assert_eq!(left_json, right_json);
@@ -1403,10 +1564,223 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn graph_commands_persist_nodes_edges_and_mark_draft_dirty() {
+        let state = test_state(test_database());
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let start_id = Uuid::new_v4();
+        {
+            let mut store = state.inner.lock().unwrap();
+            store.workspaces.insert(
+                workspace_id,
+                Workspace {
+                    id: workspace_id,
+                    name: "Workspace".to_string(),
+                    path: "D:/Workspace".to_string(),
+                    updated_at: now(),
+                },
+            );
+            store.canvases.insert(
+                canvas_id,
+                Canvas {
+                    id: canvas_id,
+                    workspace_id,
+                    name: "Canvas".to_string(),
+                    status: RunStatus::Idle,
+                    default_entrypoint_node_id: Some(start_id),
+                    revision: 0,
+                    draft_revision: 0,
+                    draft_dirty: false,
+                    updated_at: now(),
+                },
+            );
+            store.nodes.insert(
+                start_id,
+                CanvasNode {
+                    id: start_id,
+                    canvas_id,
+                    name: "Start".to_string(),
+                    kind: "trigger.start".to_string(),
+                },
+            );
+        }
+
+        let app = router(state.clone(), test_security());
+        let node_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/nodes"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"name":"Review sources","kind":"task.manual"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(node_response.status(), StatusCode::CREATED);
+        let node: CanvasNode = serde_json::from_slice(
+            &to_bytes(node_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let edge_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/edges"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "sourceNodeId": start_id,
+                            "targetNodeId": node.id
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(edge_response.status(), StatusCode::CREATED);
+        let edge: CanvasEdge = serde_json::from_slice(
+            &to_bytes(edge_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let store = state.inner.lock().unwrap();
+        let canvas = store.canvases.get(&canvas_id).unwrap();
+        assert_eq!(canvas.draft_revision, 2);
+        assert!(canvas.draft_dirty);
+        assert_eq!(store.nodes.get(&node.id).unwrap().name, "Review sources");
+        assert_eq!(store.edges.get(&edge.id).unwrap().target_node_id, node.id);
+        let graph: serde_json::Value =
+            serde_json::from_str(&graph_json_for_canvas(&store, canvas_id)).unwrap();
+        assert_eq!(graph["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(graph["edges"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn graph_commands_reject_invalid_and_duplicate_edges() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let second_node_id = Uuid::new_v4();
+        let other_canvas_id = Uuid::new_v4();
+        let other_node_id = Uuid::new_v4();
+        {
+            let mut store = state.inner.lock().unwrap();
+            for (id, name) in [(canvas_id, "Canvas"), (other_canvas_id, "Other")] {
+                store.canvases.insert(
+                    id,
+                    Canvas {
+                        id,
+                        workspace_id: Uuid::new_v4(),
+                        name: name.to_string(),
+                        status: RunStatus::Idle,
+                        default_entrypoint_node_id: None,
+                        revision: 0,
+                        draft_revision: 0,
+                        draft_dirty: false,
+                        updated_at: now(),
+                    },
+                );
+            }
+            store.nodes.insert(
+                node_id,
+                CanvasNode {
+                    id: node_id,
+                    canvas_id,
+                    name: "A".to_string(),
+                    kind: "task.manual".to_string(),
+                },
+            );
+            store.nodes.insert(
+                second_node_id,
+                CanvasNode {
+                    id: second_node_id,
+                    canvas_id,
+                    name: "A2".to_string(),
+                    kind: "task.manual".to_string(),
+                },
+            );
+            store.nodes.insert(
+                other_node_id,
+                CanvasNode {
+                    id: other_node_id,
+                    canvas_id: other_canvas_id,
+                    name: "B".to_string(),
+                    kind: "task.manual".to_string(),
+                },
+            );
+        }
+        let app = router(state.clone(), test_security());
+        let send_edge = |payload: serde_json::Value| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/canvases/{canvas_id}/edges"))
+                        .header(header::HOST, HOST_AUTHORITY)
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        assert_eq!(
+            send_edge(serde_json::json!({
+                "sourceNodeId": node_id,
+                "targetNodeId": node_id
+            }))
+            .await
+            .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            send_edge(serde_json::json!({
+                "sourceNodeId": node_id,
+                "targetNodeId": other_node_id
+            }))
+            .await
+            .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let valid = serde_json::json!({
+            "sourceNodeId": node_id,
+            "targetNodeId": second_node_id
+        });
+        assert_eq!(send_edge(valid.clone()).await.status(), StatusCode::CREATED);
+        assert_eq!(send_edge(valid).await.status(), StatusCode::CONFLICT);
+
+        let store = state.inner.lock().unwrap();
+        let canvas = store.canvases.get(&canvas_id).unwrap();
+        assert_eq!(canvas.draft_revision, 1);
+        assert!(canvas.draft_dirty);
+        assert_eq!(store.edges.len(), 1);
+    }
+
+    #[tokio::test]
     async fn save_revision_requires_current_draft_revision_and_freezes_digest() {
         let state = test_state(test_database());
         let canvas_id = Uuid::new_v4();
         let node_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
         let workspace_id = Uuid::new_v4();
         let canvas = Canvas {
             id: canvas_id,
@@ -1429,6 +1803,25 @@ mod tests {
             let mut store = state.inner.lock().unwrap();
             store.canvases.insert(canvas_id, canvas);
             store.nodes.insert(node_id, node);
+            store.nodes.insert(
+                task_id,
+                CanvasNode {
+                    id: task_id,
+                    canvas_id,
+                    name: "Task".to_string(),
+                    kind: "task.manual".to_string(),
+                },
+            );
+            let edge_id = Uuid::new_v4();
+            store.edges.insert(
+                edge_id,
+                CanvasEdge {
+                    id: edge_id,
+                    canvas_id,
+                    source_node_id: node_id,
+                    target_node_id: task_id,
+                },
+            );
         }
         let app = router(state.clone(), test_security());
         let stale = app
@@ -1471,6 +1864,8 @@ mod tests {
                 .unwrap();
         assert!(revision.content_digest.starts_with("sha256:"));
         assert!(revision.graph_json.contains("trigger.start"));
+        assert!(revision.graph_json.contains("task.manual"));
+        assert!(revision.graph_json.contains(&task_id.to_string()));
         assert_eq!(revision.content_digest, sha256_digest(&revision.graph_json));
         let state_snapshot = state.inner.lock().unwrap();
         let updated_canvas = state_snapshot.canvases.get(&canvas_id).unwrap();

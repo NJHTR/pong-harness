@@ -3,7 +3,14 @@
 /**
  * Current local Host HTTP slice only; not the complete domain contract.
  */
-export type HostWire = HostSnapshot | HostEventBatch | HostError | StartRunRequest | SaveRevisionRequest;
+export type HostWire =
+  | HostSnapshot
+  | HostEventBatch
+  | HostError
+  | StartRunRequest
+  | SaveRevisionRequest
+  | CreateNodeRequest
+  | CreateEdgeRequest;
 export type RunStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
 
 export interface HostSnapshot {
@@ -11,6 +18,7 @@ export interface HostSnapshot {
   workspaces: Workspace[];
   canvases: Canvas[];
   nodes: CanvasNode[];
+  edges: CanvasEdge[];
   revisions: CanvasRevision[];
   runs: Run[];
   notifications: Notification[];
@@ -37,6 +45,12 @@ export interface CanvasNode {
   canvasId: string;
   name: string;
   kind: string;
+}
+export interface CanvasEdge {
+  id: string;
+  canvasId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
 }
 export interface CanvasRevision {
   id: string;
@@ -89,4 +103,12 @@ export interface StartRunRequest {
 }
 export interface SaveRevisionRequest {
   expectedDraftRevision?: number;
+}
+export interface CreateNodeRequest {
+  name: string;
+  kind: string;
+}
+export interface CreateEdgeRequest {
+  sourceNodeId: string;
+  targetNodeId: string;
 }

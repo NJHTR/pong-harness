@@ -38,6 +38,15 @@ pub struct CanvasNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasEdge {
+    pub id: Id,
+    pub canvas_id: Id,
+    pub source_node_id: Id,
+    pub target_node_id: Id,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     Idle,

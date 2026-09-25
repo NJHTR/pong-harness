@@ -8,7 +8,9 @@
     { "$ref": "#/definitions/HostEventBatch" },
     { "$ref": "#/definitions/HostError" },
     { "$ref": "#/definitions/StartRunRequest" },
-    { "$ref": "#/definitions/SaveRevisionRequest" }
+    { "$ref": "#/definitions/SaveRevisionRequest" },
+    { "$ref": "#/definitions/CreateNodeRequest" },
+    { "$ref": "#/definitions/CreateEdgeRequest" }
   ],
   "definitions": {
     "RunStatus": { "type": "string", "enum": ["idle", "queued", "running", "succeeded", "failed"] },
@@ -48,6 +50,17 @@
         "canvasId": { "type": "string" },
         "name": { "type": "string" },
         "kind": { "type": "string" }
+      }
+    },
+    "CanvasEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "canvasId", "sourceNodeId", "targetNodeId"],
+      "properties": {
+        "id": { "type": "string" },
+        "canvasId": { "type": "string" },
+        "sourceNodeId": { "type": "string" },
+        "targetNodeId": { "type": "string" }
       }
     },
     "CanvasRevision": {
@@ -95,12 +108,13 @@
     "HostSnapshot": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["snapshotVersion", "workspaces", "canvases", "nodes", "revisions", "runs", "notifications"],
+      "required": ["snapshotVersion", "workspaces", "canvases", "nodes", "edges", "revisions", "runs", "notifications"],
       "properties": {
         "snapshotVersion": { "type": "integer", "minimum": 0 },
         "workspaces": { "type": "array", "items": { "$ref": "#/definitions/Workspace" } },
         "canvases": { "type": "array", "items": { "$ref": "#/definitions/Canvas" } },
         "nodes": { "type": "array", "items": { "$ref": "#/definitions/CanvasNode" } },
+        "edges": { "type": "array", "items": { "$ref": "#/definitions/CanvasEdge" } },
         "revisions": { "type": "array", "items": { "$ref": "#/definitions/CanvasRevision" } },
         "runs": { "type": "array", "items": { "$ref": "#/definitions/Run" } },
         "notifications": { "type": "array", "items": { "$ref": "#/definitions/Notification" } }
@@ -153,6 +167,24 @@
       "additionalProperties": false,
       "properties": {
         "expectedDraftRevision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "CreateNodeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 }
+      }
+    },
+    "CreateEdgeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceNodeId", "targetNodeId"],
+      "properties": {
+        "sourceNodeId": { "type": "string" },
+        "targetNodeId": { "type": "string" }
       }
     }
   }
