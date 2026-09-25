@@ -2,8 +2,8 @@
 
 > 文档类型：Product Delivery Roadmap / Work Breakdown Structure  
 > 文档状态：Experimental Proposal  
-> 原始估算日期：2026-09-20；第 2 节及下方任务表的百分比尚未逐条重估，不代表 2026-09-24 当前完成度。
-> 仓库事实核对日期：2026-09-24（仅第 1.2 节及第 2.1 节）
+> 原始估算日期：2026-09-20；第 2 节及下方任务表的百分比尚未逐条重估，不代表 2026-09-26 当前完成度。
+> 仓库事实核对日期：2026-09-26（仅第 1.2 节及第 2.1 节）
 > 适用分支：`dev`  
 > 关联文档：[全系统 PRD](29-system-product-requirements.md) · [系统拆分与流程模型](31-system-decomposition-and-process-model.md) · [正式合同](27-normative-contracts/00-README.md) · [开放门禁](28-design-review/01-open-gate-matrix.md) · [当前实现状态](25-implementation-blueprint/15-current-implementation-status.md) · [需求证据台账](34-requirement-evidence-ledger.md)
 
@@ -39,7 +39,7 @@
 - `apps/ui-lab`：React/Vite UI 设计验证应用，包含 Workbench、Canvas、节点、连接、Workspace 管理、Automations、Extensions、Settings、Files、Environments、Agents 和通知 Mock。
 - `packages/seekwd-ui`：组件库，包含 WindowFrame、Sidebar、CanvasNode、Button、Dialog、Notification 等组件。
 - `apps/ui-lab/src/mock`：内存 Mock API，已覆盖部分 Workspace、Canvas、Node、Edge、Run 和 Notification 命令。
-- `apps/workbench` 已有独立 React/Vite 入口。默认 `localStorage` 模拟适配器，可通过 `VITE_HOST_URL` 接入 HTTP Host；图展示仍是固定视图，不能替代完整正式前端。
+- `apps/workbench` 已有独立 React/Vite 入口。默认 `localStorage` 模拟适配器，可通过开发代理接入 HTTP Host；本轮已支持真实快照中的节点/边渲染、添加节点、创建最小连接、保存 Revision 和模拟 Run，但仍不能替代完整正式前端。
 - Cargo workspace 只有 `pong-core` 和 `pong-host`。Host 有 SQLite 快照、幂等日志、快照更新事件游标和部分恢复测试；没有真实 Worker、Sandbox、Docker 或远程执行器，也没有完整 Event Store。
 - UI Lab 中部分页面仍然直接使用 React local state，而不是完整 Mock API；这些完成度只计作演示完成，不计作生产闭环完成。
 
@@ -105,9 +105,9 @@
 | `P0-009`、`P0-010` | 当前 Host HTTP 切片已有 JSON Schema 生成 TS 类型、Rust serde/HTTP 共享样本合同测试；稳定需求 ID 已存在；已核对条目见[证据台账](34-requirement-evidence-ledger.md) | 完整领域、Rust/SQLite/IPC 生成和版本兼容未完成；追踪只覆盖当前纵向切片，未覆盖全部需求及 Issue/PR |
 | `HST-C-001`、`HST-C-002`、`HST-V-001` | Host 可启动；开发 HTTP 已有限制来源与 Bearer 凭据，Host 按数据库路径持有跨平台独占锁并支持 Ctrl+C 优雅关闭；SQLite 已有 WAL/版本迁移、快照写入失败回滚、异常数据拒绝启动，模拟 Run 重启恢复有局部实现 | 无本机用户绑定 Session、受保护 IPC、Worker/Wait/Handle 恢复或完整崩溃演练 |
 | `HST-R-001`、`HST-C-003`、`HST-C-004`、`HST-R-002` | 部分 Query/Command HTTP 路由、`StartRun` 幂等键、快照版本和快照更新事件游标 | 无认证/授权、完整 Command/Event Envelope、Outbox/Inbox、事件重放及游标过期重同步 |
-| `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、Canvas Draft 修订字段和最小节点图 JSON Revision 摘要可持久化 | 未做目录预检、完整 CanvasDraft/Graph 命令、端口/边、Release、影响分析与恢复 |
+| `WSP-*`、`CVS-*`、`DRF-*` | Workspace/Canvas 基础创建和改名、默认起点节点、节点/边、Draft 修订字段和最小节点图 JSON Revision 摘要可持久化；证据提交 `6d07169` | 未做目录预检、完整 CanvasDraft/Graph 命令、端口类型/边语义、Release、影响分析与恢复 |
 | `RUN-C-001`、`HST-V-001` | 默认入口 + 修订号 + 幂等键可启动模拟 Run，重启后定时完成 | 无输入、模式、Authority、Budget、RunSnapshot、NodeRun 或真实执行；模拟成功不能当作工作完成 |
-| `FNT-ARCH-001`、`FNT-DATA-001`、`FNT-DATA-004` | 独立 Workbench 可构建；同一有限 HostClient 有本地模拟与 HTTP 适配器，HTTP 轮询快照更新 | 无桌面壳、错误边界、稳定游标持久化、事件去重、断线重同步或完整模块路由 |
+| `FNT-ARCH-001`、`FNT-DATA-001`、`FNT-DATA-004` | 独立 Workbench 可构建；同一有限 HostClient 有本地模拟与 HTTP 适配器；本轮已将真实节点/边图编辑、Revision 保存入口接入 Workbench，证据提交 `bb0a317` | 无桌面壳、错误边界、稳定游标持久化、事件去重、断线重同步或完整模块路由 |
 
 已核对条目的提交、测试与未完成条件见[需求证据台账](34-requirement-evidence-ledger.md)；未列出的需求保持“未复核”，不沿用历史百分比作为完成声明。
 

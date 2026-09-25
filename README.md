@@ -6,10 +6,10 @@ Seekwd 是一个本地优先的 Agent 工作台。用户用自然语言描述目
 
 - `packages/seekwd-ui`：从 WebSwift 风格演化出的 React 工作台组件库，包含双主题、基础控件、工作台布局和节点外观。
 - `apps/ui-lab`：Seekwd UI 的可交互设计原型，部分操作使用内存 Mock。
-- `apps/workbench`：独立的 React/Vite 产品前端入口，提供有限的 Workspace、Canvas 和 Run 操作；画布图仍主要是静态展示。
+- `apps/workbench`：独立的 React/Vite 产品前端入口，提供 MVP 级 Workspace、Canvas、节点/连接编辑、Revision 保存和 Run 操作；图数据来自 Host 快照或本地适配器。
 - `crates/pong-core`、`crates/pong-host`：本地 Rust Host 的最小模型和 HTTP 接口。Host 使用 SQLite 保存快照、Run 幂等日志和快照更新游标。
 
-Workbench 默认使用浏览器 `localStorage` 适配器。开发时可通过同源 Vite 代理连接本地 Host；token 仅保存在开发服务器环境变量中，不写进 `VITE_*` 前端资源。Host 的 Run 仍是约 1.6 秒的模拟完成，不执行节点、文件操作或测试；尚无真实 Worker、LocalRestricted 沙箱或 Tauri 桌面壳。此开发 HTTP 边界不是正式的本机用户会话或受保护 IPC，不可据此开放任意执行能力。
+Workbench 默认使用浏览器 `localStorage` 适配器。开发时可通过同源 Vite 代理连接本地 Host；token 仅保存在开发服务器环境变量中，不写进 `VITE_*` 前端资源。MVP 画布流程为：创建 Canvas（自动生成 Start 节点）→添加 task 节点→连接相邻节点→保存 Revision→Run；Host 的 Run 仍是约 1.6 秒的模拟完成，不执行节点、文件操作或测试；尚无真实 Worker、LocalRestricted 沙箱或 Tauri 桌面壳。此开发 HTTP 边界不是正式的本机用户会话或受保护 IPC，不可据此开放任意执行能力。
 
 ## 本地开发
 
