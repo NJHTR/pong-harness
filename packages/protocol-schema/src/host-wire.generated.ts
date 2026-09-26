@@ -8,10 +8,13 @@ export type HostWire =
   | HostEventBatch
   | HostError
   | StartRunRequest
+  | SubmitRunInputRequest
   | SaveRevisionRequest
   | CreateNodeRequest
-  | CreateEdgeRequest;
-export type RunStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
+  | CreateEdgeRequest
+  | CreatePortRequest
+  | UpdateNodeRequest;
+export type RunStatus = "idle" | "queued" | "running" | "waiting_input" | "succeeded" | "failed";
 
 export interface HostSnapshot {
   snapshotVersion: number;
@@ -45,12 +48,26 @@ export interface CanvasNode {
   canvasId: string;
   name: string;
   kind: string;
+  ports: CanvasPort[];
+  config?: {
+    [k: string]: unknown;
+  };
+}
+export interface CanvasPort {
+  id: string;
+  nodeId: string;
+  name: string;
+  direction: "input" | "output";
+  kind: "data" | "flow" | "event" | "resource";
 }
 export interface CanvasEdge {
   id: string;
   canvasId: string;
   sourceNodeId: string;
+  sourcePortId: string;
   targetNodeId: string;
+  targetPortId: string;
+  kind: "data" | "flow" | "event" | "resource";
 }
 export interface CanvasRevision {
   id: string;
@@ -69,6 +86,10 @@ export interface Run {
   status: RunStatus;
   startedAt: string;
   finishedAt: string | null;
+  currentNodeId?: string | null;
+  inputPrompt?: string | null;
+  result?: string | null;
+  completedNodeIds?: string[];
 }
 export interface Notification {
   id: string;
@@ -101,6 +122,9 @@ export interface StartRunRequest {
   entrypoint: "default";
   idempotencyKey: string;
 }
+export interface SubmitRunInputRequest {
+  value: string;
+}
 export interface SaveRevisionRequest {
   expectedDraftRevision?: number;
 }
@@ -110,5 +134,19 @@ export interface CreateNodeRequest {
 }
 export interface CreateEdgeRequest {
   sourceNodeId: string;
+  sourcePortId: string;
   targetNodeId: string;
+  targetPortId: string;
+  kind: "data" | "flow" | "event" | "resource";
+}
+export interface CreatePortRequest {
+  name: string;
+  direction: "input" | "output";
+  kind: "data" | "flow" | "event" | "resource";
+}
+export interface UpdateNodeRequest {
+  name?: string;
+  config?: {
+    [k: string]: unknown;
+  };
 }

@@ -8,12 +8,15 @@
     { "$ref": "#/definitions/HostEventBatch" },
     { "$ref": "#/definitions/HostError" },
     { "$ref": "#/definitions/StartRunRequest" },
+    { "$ref": "#/definitions/SubmitRunInputRequest" },
     { "$ref": "#/definitions/SaveRevisionRequest" },
     { "$ref": "#/definitions/CreateNodeRequest" },
-    { "$ref": "#/definitions/CreateEdgeRequest" }
+    { "$ref": "#/definitions/CreateEdgeRequest" },
+    { "$ref": "#/definitions/CreatePortRequest" },
+    { "$ref": "#/definitions/UpdateNodeRequest" }
   ],
   "definitions": {
-    "RunStatus": { "type": "string", "enum": ["idle", "queued", "running", "succeeded", "failed"] },
+    "RunStatus": { "type": "string", "enum": ["idle", "queued", "running", "waiting_input", "succeeded", "failed"] },
     "Workspace": {
       "type": "object",
       "additionalProperties": false,
@@ -44,23 +47,40 @@
     "CanvasNode": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "canvasId", "name", "kind"],
+      "required": ["id", "canvasId", "name", "kind", "ports"],
       "properties": {
         "id": { "type": "string" },
         "canvasId": { "type": "string" },
         "name": { "type": "string" },
-        "kind": { "type": "string" }
+        "kind": { "type": "string" },
+        "ports": { "type": "array", "items": { "$ref": "#/definitions/CanvasPort" } },
+        "config": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "CanvasPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "nodeId", "name", "direction", "kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "nodeId": { "type": "string" },
+        "name": { "type": "string" },
+        "direction": { "type": "string", "enum": ["input", "output"] },
+        "kind": { "type": "string", "enum": ["data", "flow", "event", "resource"] }
       }
     },
     "CanvasEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "canvasId", "sourceNodeId", "targetNodeId"],
+      "required": ["id", "canvasId", "sourceNodeId", "sourcePortId", "targetNodeId", "targetPortId", "kind"],
       "properties": {
         "id": { "type": "string" },
         "canvasId": { "type": "string" },
         "sourceNodeId": { "type": "string" },
-        "targetNodeId": { "type": "string" }
+        "sourcePortId": { "type": "string" },
+        "targetNodeId": { "type": "string" },
+        "targetPortId": { "type": "string" },
+        "kind": { "type": "string", "enum": ["data", "flow", "event", "resource"] }
       }
     },
     "CanvasRevision": {
@@ -88,7 +108,11 @@
         "revision": { "type": "integer", "minimum": 0 },
         "status": { "$ref": "#/definitions/RunStatus" },
         "startedAt": { "type": "string" },
-        "finishedAt": { "type": ["string", "null"] }
+        "finishedAt": { "type": ["string", "null"] },
+        "currentNodeId": { "type": ["string", "null"] },
+        "inputPrompt": { "type": ["string", "null"] },
+        "result": { "type": ["string", "null"] },
+        "completedNodeIds": { "type": "array", "items": { "type": "string" } }
       }
     },
     "Notification": {
@@ -162,6 +186,14 @@
         "idempotencyKey": { "type": "string", "minLength": 1 }
       }
     },
+    "SubmitRunInputRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "string" }
+      }
+    },
     "SaveRevisionRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -181,11 +213,33 @@
     "CreateEdgeRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceNodeId", "targetNodeId"],
+      "required": ["sourceNodeId", "sourcePortId", "targetNodeId", "targetPortId", "kind"],
       "properties": {
         "sourceNodeId": { "type": "string" },
-        "targetNodeId": { "type": "string" }
+        "sourcePortId": { "type": "string" },
+        "targetNodeId": { "type": "string" },
+        "targetPortId": { "type": "string" },
+        "kind": { "type": "string", "enum": ["data", "flow", "event", "resource"] }
       }
+    },
+    "CreatePortRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "direction", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "direction": { "type": "string", "enum": ["input", "output"] },
+        "kind": { "type": "string", "enum": ["data", "flow", "event", "resource"] }
+      }
+    },
+    "UpdateNodeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "config": { "type": "object", "additionalProperties": true }
+      },
+      "minProperties": 1
     }
   }
 }

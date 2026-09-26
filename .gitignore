@@ -6,6 +6,8 @@ target/
 *.log
 *.sqlite3
 *.sqlite3-*
+pong-host.lock
+pong-host-dev.lock
 .DS_Store
 
 # Local environment and editor state

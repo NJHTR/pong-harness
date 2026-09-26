@@ -27,7 +27,16 @@
         "id": "33333333-3333-4333-8333-333333333333",
         "canvasId": "22222222-2222-4222-8222-222222222222",
         "name": "Start",
-        "kind": "trigger.start"
+        "kind": "trigger.start",
+        "ports": [
+          {
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "nodeId": "33333333-3333-4333-8333-333333333333",
+            "name": "Start",
+            "direction": "output",
+            "kind": "flow"
+          }
+        ]
       }
     ],
     "edges": [],

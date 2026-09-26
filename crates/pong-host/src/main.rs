@@ -4,11 +4,12 @@ use axum::{
     http::{HeaderValue, Method, Request, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use fs2::FileExt;
 use pong_core::{
-    Canvas, CanvasEdge, CanvasNode, CanvasRevision, Notification, Run, RunStatus, Workspace,
+    Canvas, CanvasEdge, CanvasNode, CanvasPort, CanvasRevision, Notification, PortDirection,
+    PortKind, Run, RunStatus, Workspace,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -193,7 +194,25 @@ struct CreateNodeInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateEdgeInput {
     source_node_id: Uuid,
+    source_port_id: Uuid,
     target_node_id: Uuid,
+    target_port_id: Uuid,
+    kind: PortKind,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreatePortInput {
+    name: String,
+    direction: PortDirection,
+    kind: PortKind,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateNodeInput {
+    name: Option<String>,
+    config: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -213,6 +232,12 @@ struct StartRunInput {
     revision: u64,
     entrypoint: String,
     idempotency_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubmitRunInput {
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -779,9 +804,220 @@ fn mark_canvas_dirty(store: &mut Store, canvas_id: Uuid) -> Result<(), HostError
     Ok(())
 }
 
+fn ensure_canvas_editable(store: &Store, canvas_id: Uuid) -> Result<(), HostError> {
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
+    if matches!(canvas.status, RunStatus::Running | RunStatus::WaitingInput)
+        || store.runs.values().any(|run| {
+            run.canvas_id == canvas_id
+                && matches!(run.status, RunStatus::Running | RunStatus::WaitingInput)
+        })
+    {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "CANVAS_HAS_ACTIVE_RUN",
+            "Cannot edit this canvas while a run is active or waiting for input",
+            false,
+        ));
+    }
+    Ok(())
+}
+
 fn sha256_digest(content: &str) -> String {
     let digest = Sha256::digest(content.as_bytes());
     format!("sha256:{digest:x}")
+}
+
+fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static str> {
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .ok_or("Canvas was not found")?;
+    let nodes = store
+        .nodes
+        .values()
+        .filter(|node| node.canvas_id == canvas_id)
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
+        return Err("The canvas has no nodes");
+    }
+    let entrypoint_id = canvas
+        .default_entrypoint_node_id
+        .ok_or("The canvas has no manual entrypoint")?;
+    if !nodes.iter().any(|node| node.id == entrypoint_id) {
+        return Err("The default entrypoint node was not found");
+    }
+    let supported = ["trigger.start", "input.text", "task.manual", "output.text"];
+    if nodes
+        .iter()
+        .any(|node| !supported.contains(&node.kind.as_str()))
+    {
+        return Err("A node kind is not executable in this MVP");
+    }
+    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for edge in store
+        .edges
+        .values()
+        .filter(|edge| edge.canvas_id == canvas_id)
+    {
+        if edge.source_node_id == edge.target_node_id {
+            return Err("A node cannot connect to itself");
+        }
+        let source = nodes
+            .iter()
+            .find(|node| node.id == edge.source_node_id)
+            .ok_or("An edge source node was not found")?;
+        let target = nodes
+            .iter()
+            .find(|node| node.id == edge.target_node_id)
+            .ok_or("An edge target node was not found")?;
+        let source_port = source
+            .ports
+            .iter()
+            .find(|port| port.id == edge.source_port_id)
+            .ok_or("An edge source port was not found")?;
+        let target_port = target
+            .ports
+            .iter()
+            .find(|port| port.id == edge.target_port_id)
+            .ok_or("An edge target port was not found")?;
+        if !matches!(source_port.direction, PortDirection::Output)
+            || !matches!(target_port.direction, PortDirection::Input)
+            || std::mem::discriminant(&source_port.kind)
+                != std::mem::discriminant(&target_port.kind)
+            || std::mem::discriminant(&source_port.kind) != std::mem::discriminant(&edge.kind)
+        {
+            return Err("An edge connects incompatible ports");
+        }
+        if matches!(edge.kind, PortKind::Flow) {
+            adjacency
+                .entry(edge.source_node_id)
+                .or_default()
+                .push(edge.target_node_id);
+        }
+    }
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = vec![entrypoint_id];
+    while let Some(node_id) = queue.pop() {
+        if !visited.insert(node_id) {
+            continue;
+        }
+        if let Some(next) = adjacency.get(&node_id) {
+            queue.extend(next.iter().copied());
+        }
+    }
+    if nodes.iter().any(|node| {
+        !visited.contains(&node.id) && !matches!(node.kind.as_str(), "input.text" | "input.file")
+    }) {
+        return Err("Every required node must be reachable from the selected entrypoint");
+    }
+    Ok(())
+}
+
+fn first_interactive_node(
+    store: &Store,
+    canvas_id: Uuid,
+    completed_node_ids: &[Uuid],
+) -> Option<(Uuid, String)> {
+    let canvas = store.canvases.get(&canvas_id)?;
+    let entrypoint_id = canvas.default_entrypoint_node_id?;
+    let nodes = store
+        .nodes
+        .values()
+        .filter(|node| node.canvas_id == canvas_id)
+        .map(|node| (node.id, node))
+        .collect::<HashMap<_, _>>();
+    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for edge in store
+        .edges
+        .values()
+        .filter(|edge| edge.canvas_id == canvas_id)
+    {
+        adjacency
+            .entry(edge.source_node_id)
+            .or_default()
+            .push(edge.target_node_id);
+    }
+    let mut queue = std::collections::VecDeque::from([entrypoint_id]);
+    let mut visited = std::collections::HashSet::new();
+    let completed = completed_node_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    while let Some(node_id) = queue.pop_front() {
+        if !visited.insert(node_id) {
+            continue;
+        }
+        let candidate = nodes.get(&node_id);
+        let configured_text = candidate
+            .and_then(|node| node.config.get("inputValue"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        if !completed.contains(&node_id)
+            && candidate.is_some_and(|node| {
+                matches!(node.kind.as_str(), "task.manual")
+                    || (node.kind == "input.text" && !configured_text)
+            })
+        {
+            let node = nodes.get(&node_id)?;
+            let prompt = node
+                .config
+                .get("instruction")
+                .or_else(|| node.config.get("inputValue"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| match node.kind.as_str() {
+                    "task.manual" => format!("Complete the manual task: {}", node.name),
+                    _ => format!("Enter a value for {}", node.name),
+                });
+            return Some((node_id, prompt));
+        }
+        if let Some(next) = adjacency.get(&node_id) {
+            queue.extend(next.iter().copied());
+        }
+    }
+    None
+}
+
+fn resolve_text_output(store: &Store, canvas_id: Uuid) -> Result<Option<String>, &'static str> {
+    let output_nodes = store
+        .nodes
+        .values()
+        .filter(|node| node.canvas_id == canvas_id && node.kind == "output.text")
+        .collect::<Vec<_>>();
+    if output_nodes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut values = Vec::with_capacity(output_nodes.len());
+    for output_node in output_nodes {
+        let input_port = output_node
+            .ports
+            .iter()
+            .find(|port| port.name == "Input" && matches!(port.direction, PortDirection::Input))
+            .ok_or("Text Output is missing its Input port")?;
+        let edge = store
+            .edges
+            .values()
+            .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == input_port.id)
+            .ok_or("Connect a text value to Text Output.Input before running")?;
+        let source = store
+            .nodes
+            .get(&edge.source_node_id)
+            .filter(|node| node.kind == "input.text")
+            .ok_or("Text Output currently accepts values from Text Input nodes")?;
+        let value = source
+            .config
+            .get("inputValue")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("Set a value on the connected Text Input node before running")?;
+        values.push(value.trim().to_string());
+    }
+    Ok(Some(values.join("\n")))
 }
 
 async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspace>> {
@@ -895,6 +1131,61 @@ async fn rename_workspace(
     Ok(Json(result))
 }
 
+async fn delete_workspace(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<StatusCode, HostError> {
+    let mut store = state.inner.lock().unwrap();
+    if !store.workspaces.contains_key(&workspace_id) {
+        return Err(not_found_error("Workspace was not found"));
+    }
+    let canvas_ids = store
+        .canvases
+        .values()
+        .filter(|canvas| canvas.workspace_id == workspace_id)
+        .map(|canvas| canvas.id)
+        .collect::<Vec<_>>();
+    if store.runs.values().any(|run| {
+        canvas_ids.contains(&run.canvas_id)
+            && matches!(
+                run.status,
+                RunStatus::Running | RunStatus::WaitingInput | RunStatus::Queued
+            )
+    }) {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "WORKSPACE_HAS_ACTIVE_RUN",
+            "Cannot delete a workspace while one of its canvases has an active run",
+            false,
+        ));
+    }
+    let previous = store.clone();
+    store.workspaces.remove(&workspace_id);
+    store.canvases.retain(|id, _| !canvas_ids.contains(id));
+    store
+        .nodes
+        .retain(|_, node| !canvas_ids.contains(&node.canvas_id));
+    store
+        .edges
+        .retain(|_, edge| !canvas_ids.contains(&edge.canvas_id));
+    store
+        .revisions
+        .retain(|_, revision| !canvas_ids.contains(&revision.canvas_id));
+    store
+        .runs
+        .retain(|_, run| !canvas_ids.contains(&run.canvas_id));
+    store.notifications.retain(|_, notification| {
+        notification
+            .canvas_id
+            .is_none_or(|canvas_id| !canvas_ids.contains(&canvas_id))
+    });
+    store
+        .run_idempotency
+        .retain(|(canvas_id, _), _| !canvas_ids.contains(canvas_id));
+    persist_candidate(&state, &mut store, previous)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn list_canvases(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
@@ -912,6 +1203,61 @@ async fn list_canvases(
     )
 }
 
+fn port(node_id: Uuid, name: &str, direction: PortDirection, kind: PortKind) -> CanvasPort {
+    CanvasPort {
+        id: Uuid::new_v4(),
+        node_id,
+        name: name.to_string(),
+        direction,
+        kind,
+    }
+}
+
+fn default_ports(node_id: Uuid, kind: &str) -> Vec<CanvasPort> {
+    match kind {
+        "trigger.start" => vec![
+            port(node_id, "Start", PortDirection::Output, PortKind::Flow),
+            port(node_id, "Event", PortDirection::Output, PortKind::Event),
+        ],
+        "output.text" => vec![
+            port(node_id, "Input", PortDirection::Input, PortKind::Data),
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+        ],
+        "input.text" => vec![
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "Text", PortDirection::Output, PortKind::Data),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
+        ],
+        "input.file" => vec![
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "File", PortDirection::Output, PortKind::Resource),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
+        ],
+        "control.approval" => vec![
+            port(node_id, "Request", PortDirection::Input, PortKind::Data),
+            port(node_id, "Approved", PortDirection::Output, PortKind::Event),
+        ],
+        "trigger.event" => vec![port(
+            node_id,
+            "Event",
+            PortDirection::Output,
+            PortKind::Event,
+        )],
+        _ => vec![
+            port(node_id, "Input", PortDirection::Input, PortKind::Data),
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "Result", PortDirection::Output, PortKind::Data),
+            port(
+                node_id,
+                "Artifact",
+                PortDirection::Output,
+                PortKind::Resource,
+            ),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Event),
+        ],
+    }
+}
+
 async fn create_canvas(
     State(state): State<AppState>,
     Json(input): Json<CreateCanvas>,
@@ -927,18 +1273,9 @@ async fn create_canvas(
         draft_dirty: false,
         updated_at: now(),
     };
-    let start_node = CanvasNode {
-        id: Uuid::new_v4(),
-        canvas_id: item.id,
-        name: "Start".to_string(),
-        kind: "trigger.start".to_string(),
-    };
-    let mut item = item;
-    item.default_entrypoint_node_id = Some(start_node.id);
     let mut store = state.inner.lock().unwrap();
     let previous = store.clone();
     store.canvases.insert(item.id, item.clone());
-    store.nodes.insert(start_node.id, start_node);
     persist_candidate(&state, &mut store, previous)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -962,12 +1299,75 @@ async fn create_node(
         canvas_id,
         name: name.to_string(),
         kind: kind.to_string(),
+        ports: default_ports(Uuid::nil(), kind),
+        config: serde_json::Map::new(),
+    };
+    let node = CanvasNode {
+        ports: default_ports(node.id, &node.kind),
+        ..node
     };
     let previous = store.clone();
     store.nodes.insert(node.id, node.clone());
     mark_canvas_dirty(&mut store, canvas_id)?;
     persist_candidate(&state, &mut store, previous)?;
     Ok((StatusCode::CREATED, Json(node)))
+}
+
+async fn update_node(
+    State(state): State<AppState>,
+    Path(node_id): Path<Uuid>,
+    Json(input): Json<UpdateNodeInput>,
+) -> Result<Json<CanvasNode>, HostError> {
+    let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
+    let (canvas_id, result) = {
+        let node = store
+            .nodes
+            .get_mut(&node_id)
+            .ok_or_else(|| not_found_error("Node was not found"))?;
+        if let Some(name) = input.name {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(invalid_input_error("Node name is required"));
+            }
+            node.name = name.to_string();
+        }
+        if let Some(config) = input.config {
+            for (key, value) in config {
+                node.config.insert(key, value);
+            }
+        }
+        (node.canvas_id, node.clone())
+    };
+    mark_canvas_dirty(&mut store, canvas_id)?;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok(Json(result))
+}
+
+async fn delete_node(
+    State(state): State<AppState>,
+    Path(node_id): Path<Uuid>,
+) -> Result<StatusCode, HostError> {
+    let mut store = state.inner.lock().unwrap();
+    let node = store
+        .nodes
+        .get(&node_id)
+        .cloned()
+        .ok_or_else(|| not_found_error("Node was not found"))?;
+    ensure_canvas_editable(&store, node.canvas_id)?;
+    let previous = store.clone();
+    store.nodes.remove(&node_id);
+    store
+        .edges
+        .retain(|_, edge| edge.source_node_id != node_id && edge.target_node_id != node_id);
+    if let Some(canvas) = store.canvases.get_mut(&node.canvas_id) {
+        if canvas.default_entrypoint_node_id == Some(node_id) {
+            canvas.default_entrypoint_node_id = None;
+        }
+    }
+    mark_canvas_dirty(&mut store, node.canvas_id)?;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create_edge(
@@ -982,23 +1382,47 @@ async fn create_edge(
     if !store.canvases.contains_key(&canvas_id) {
         return Err(not_found_error("Canvas was not found"));
     }
-    let nodes_belong = [input.source_node_id, input.target_node_id]
-        .into_iter()
-        .all(|node_id| {
-            store
-                .nodes
-                .get(&node_id)
-                .is_some_and(|node| node.canvas_id == canvas_id)
-        });
-    if !nodes_belong {
+    ensure_canvas_editable(&store, canvas_id)?;
+    let Some(source_node) = store.nodes.get(&input.source_node_id) else {
+        return Err(invalid_input_error("Source node was not found"));
+    };
+    let Some(target_node) = store.nodes.get(&input.target_node_id) else {
+        return Err(invalid_input_error("Target node was not found"));
+    };
+    if source_node.canvas_id != canvas_id || target_node.canvas_id != canvas_id {
         return Err(invalid_input_error(
             "Both edge endpoints must belong to the canvas",
+        ));
+    }
+    let Some(source_port) = source_node
+        .ports
+        .iter()
+        .find(|port| port.id == input.source_port_id)
+    else {
+        return Err(invalid_input_error("Source port was not found"));
+    };
+    let Some(target_port) = target_node
+        .ports
+        .iter()
+        .find(|port| port.id == input.target_port_id)
+    else {
+        return Err(invalid_input_error("Target port was not found"));
+    };
+    if !matches!(source_port.direction, PortDirection::Output)
+        || !matches!(target_port.direction, PortDirection::Input)
+        || std::mem::discriminant(&source_port.kind) != std::mem::discriminant(&target_port.kind)
+        || std::mem::discriminant(&source_port.kind) != std::mem::discriminant(&input.kind)
+    {
+        return Err(invalid_input_error(
+            "Edges must connect a compatible output port to an input port",
         ));
     }
     if store.edges.values().any(|edge| {
         edge.canvas_id == canvas_id
             && edge.source_node_id == input.source_node_id
+            && edge.source_port_id == input.source_port_id
             && edge.target_node_id == input.target_node_id
+            && edge.target_port_id == input.target_port_id
     }) {
         return Err(HostError::new(
             StatusCode::CONFLICT,
@@ -1011,13 +1435,70 @@ async fn create_edge(
         id: Uuid::new_v4(),
         canvas_id,
         source_node_id: input.source_node_id,
+        source_port_id: input.source_port_id,
         target_node_id: input.target_node_id,
+        target_port_id: input.target_port_id,
+        kind: input.kind,
     };
     let previous = store.clone();
     store.edges.insert(edge.id, edge.clone());
     mark_canvas_dirty(&mut store, canvas_id)?;
     persist_candidate(&state, &mut store, previous)?;
     Ok((StatusCode::CREATED, Json(edge)))
+}
+
+async fn delete_edge(
+    State(state): State<AppState>,
+    Path(edge_id): Path<Uuid>,
+) -> Result<StatusCode, HostError> {
+    let mut store = state.inner.lock().unwrap();
+    let edge = store
+        .edges
+        .get(&edge_id)
+        .cloned()
+        .ok_or_else(|| not_found_error("Connection was not found"))?;
+    ensure_canvas_editable(&store, edge.canvas_id)?;
+    let previous = store.clone();
+    store.edges.remove(&edge_id);
+    mark_canvas_dirty(&mut store, edge.canvas_id)?;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_port(
+    State(state): State<AppState>,
+    Path(node_id): Path<Uuid>,
+    Json(input): Json<CreatePortInput>,
+) -> Result<(StatusCode, Json<CanvasPort>), HostError> {
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(invalid_input_error("Port name is required"));
+    }
+    let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
+    let Some(node) = store.nodes.get_mut(&node_id) else {
+        return Err(not_found_error("Node was not found"));
+    };
+    if node.ports.iter().any(|port| port.name == name) {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "PORT_ALREADY_EXISTS",
+            "A port with this name already exists on the node",
+            false,
+        ));
+    }
+    let port = CanvasPort {
+        id: Uuid::new_v4(),
+        node_id,
+        name: name.to_string(),
+        direction: input.direction,
+        kind: input.kind,
+    };
+    let canvas_id = node.canvas_id;
+    node.ports.push(port.clone());
+    mark_canvas_dirty(&mut store, canvas_id)?;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok((StatusCode::CREATED, Json(port)))
 }
 
 async fn rename_canvas(
@@ -1040,6 +1521,49 @@ async fn rename_canvas(
     let result = canvas.clone();
     persist_candidate(&state, &mut store, previous)?;
     Ok(Json(result))
+}
+
+async fn delete_canvas(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<Uuid>,
+) -> Result<StatusCode, HostError> {
+    let mut store = state.inner.lock().unwrap();
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .cloned()
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
+    if store.runs.values().any(|run| {
+        run.canvas_id == canvas_id
+            && matches!(
+                run.status,
+                RunStatus::Running | RunStatus::WaitingInput | RunStatus::Queued
+            )
+    }) {
+        return Err(HostError::new(
+            StatusCode::CONFLICT,
+            "CANVAS_HAS_ACTIVE_RUN",
+            "Cannot delete a canvas while it has an active run",
+            false,
+        ));
+    }
+    let previous = store.clone();
+    store.canvases.remove(&canvas_id);
+    store.nodes.retain(|_, node| node.canvas_id != canvas_id);
+    store.edges.retain(|_, edge| edge.canvas_id != canvas_id);
+    store
+        .revisions
+        .retain(|_, revision| revision.canvas_id != canvas_id);
+    store.runs.retain(|_, run| run.canvas_id != canvas_id);
+    store
+        .notifications
+        .retain(|_, notification| notification.canvas_id != Some(canvas_id));
+    store
+        .run_idempotency
+        .retain(|(stored_canvas_id, _), _| *stored_canvas_id != canvas_id);
+    let _ = canvas;
+    persist_candidate(&state, &mut store, previous)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn set_default_entrypoint(
@@ -1125,45 +1649,105 @@ async fn list_runs(State(state): State<AppState>, Path(canvas_id): Path<Uuid>) -
     )
 }
 
-fn remaining_run_delay(run: &Run) -> std::time::Duration {
-    let total = chrono::Duration::milliseconds(1600);
-    let Ok(started_at) = chrono::DateTime::parse_from_rfc3339(&run.started_at) else {
-        return std::time::Duration::from_millis(1600);
-    };
-    let elapsed = chrono::Utc::now().signed_duration_since(started_at.with_timezone(&chrono::Utc));
-    let remaining = (total - elapsed).max(chrono::Duration::zero());
-    std::time::Duration::from_millis(remaining.num_milliseconds() as u64)
-}
-
-fn schedule_run_completion(state: AppState, run_id: Uuid, delay: std::time::Duration) {
+fn schedule_run_execution(state: AppState, run_id: Uuid) {
     tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
+        tokio::task::yield_now().await;
         let mut store = state.inner.lock().unwrap();
         let previous = store.clone();
-        let (canvas_id, completed_run_id) = {
-            let Some(run) = store.runs.get_mut(&run_id) else {
+        let (canvas_id, run_id, result, interactive, output) = {
+            let Some(run) = store.runs.get(&run_id) else {
                 return;
             };
             if !matches!(run.status, RunStatus::Running) {
                 return;
             }
             let canvas_id = run.canvas_id;
-            run.status = RunStatus::Succeeded;
-            run.finished_at = Some(now());
-            (canvas_id, run.id)
+            let result = validate_canvas_graph(&store, canvas_id);
+            let interactive = result
+                .as_ref()
+                .ok()
+                .and_then(|_| first_interactive_node(&store, canvas_id, &run.completed_node_ids));
+            let output = if result.is_ok() && interactive.is_none() {
+                resolve_text_output(&store, canvas_id)
+            } else {
+                Ok(None)
+            };
+            let Some(run) = store.runs.get_mut(&run_id) else {
+                return;
+            };
+            if let Some((node_id, prompt)) = &interactive {
+                run.status = RunStatus::WaitingInput;
+                run.current_node_id = Some(*node_id);
+                run.input_prompt = Some(prompt.clone());
+            } else if let Err(reason) = output.as_ref() {
+                run.status = RunStatus::Failed;
+                run.input_prompt = Some((*reason).to_string());
+                run.finished_at = Some(now());
+            } else {
+                run.status = if result.is_ok() {
+                    RunStatus::Succeeded
+                } else {
+                    RunStatus::Failed
+                };
+                if let Ok(Some(value)) = &output {
+                    run.result = Some(value.clone());
+                }
+                run.finished_at = Some(now());
+            }
+            (canvas_id, run.id, result, interactive, output)
         };
         let Some(canvas) = store.canvases.get_mut(&canvas_id) else {
             *store = previous;
             return;
         };
-        canvas.status = RunStatus::Succeeded;
+        canvas.status = if interactive.is_some() {
+            RunStatus::WaitingInput
+        } else if result.is_ok() && output.is_ok() {
+            RunStatus::Succeeded
+        } else {
+            RunStatus::Failed
+        };
+        let (title, message, severity) = if let Some((_, prompt)) = interactive {
+            (
+                "Run waiting for input".to_string(),
+                format!("{} is waiting for a local input: {}.", canvas.name, prompt),
+                "info".to_string(),
+            )
+        } else if let Err(reason) = output.as_ref() {
+            (
+                "Run failed".to_string(),
+                format!("{} could not produce output: {}.", canvas.name, reason),
+                "error".to_string(),
+            )
+        } else if let Ok(Some(value)) = output.as_ref() {
+            (
+                "Output produced".to_string(),
+                format!("{} produced: {}.", canvas.name, value),
+                "success".to_string(),
+            )
+        } else if let Err(reason) = result {
+            (
+                "Run failed".to_string(),
+                format!("{} failed before execution: {}.", canvas.name, reason),
+                "error".to_string(),
+            )
+        } else {
+            (
+                "Run completed".to_string(),
+                format!(
+                    "{} completed. No interactive task node was found.",
+                    canvas.name
+                ),
+                "success".to_string(),
+            )
+        };
         let notification = Notification {
             id: Uuid::new_v4(),
-            title: "Run completed".to_string(),
-            message: format!("{} completed successfully.", canvas.name),
-            severity: "success".to_string(),
+            title,
+            message,
+            severity,
             created_at: now(),
-            run_id: Some(completed_run_id),
+            run_id: Some(run_id),
             canvas_id: Some(canvas.id),
         };
         store.notifications.insert(notification.id, notification);
@@ -1171,9 +1755,97 @@ fn schedule_run_completion(state: AppState, run_id: Uuid, delay: std::time::Dura
             eprintln!("run completion persistence failed: {error}");
             *store = previous;
             drop(store);
-            schedule_run_completion(state, run_id, std::time::Duration::from_millis(500));
+            schedule_run_execution(state, run_id);
         }
     });
+}
+
+async fn submit_run_input(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    Json(input): Json<SubmitRunInput>,
+) -> Result<Json<Run>, HostError> {
+    let value = input.value.trim();
+    if value.is_empty() {
+        return Err(invalid_input_error("A result value is required"));
+    }
+    let mut store = state.inner.lock().unwrap();
+    let previous = store.clone();
+    let (canvas_id, run, submitted_node_id) = {
+        let run = store
+            .runs
+            .get_mut(&run_id)
+            .ok_or_else(|| not_found_error("Run was not found"))?;
+        if !matches!(run.status, RunStatus::WaitingInput) {
+            return Err(HostError::new(
+                StatusCode::CONFLICT,
+                "RUN_NOT_WAITING",
+                "This run is not waiting for input",
+                false,
+            ));
+        }
+        run.status = RunStatus::Succeeded;
+        run.finished_at = Some(now());
+        run.result = Some(value.to_string());
+        let current_node_id = run.current_node_id;
+        if let Some(node_id) = current_node_id {
+            if !run.completed_node_ids.contains(&node_id) {
+                run.completed_node_ids.push(node_id);
+            }
+        }
+        run.current_node_id = None;
+        run.input_prompt = None;
+        let canvas_id = run.canvas_id;
+        (canvas_id, run.clone(), current_node_id)
+    };
+    let canvas_name = store
+        .canvases
+        .get(&canvas_id)
+        .map(|canvas| canvas.name.clone())
+        .unwrap_or_else(|| "Canvas".to_string());
+    let submitted_node_name = submitted_node_id
+        .and_then(|node_id| store.nodes.get(&node_id))
+        .map(|node| node.name.clone())
+        .unwrap_or_else(|| "Interactive task".to_string());
+    let next_interactive = first_interactive_node(&store, canvas_id, &run.completed_node_ids);
+    let notification = if let Some((node_id, prompt)) = next_interactive {
+        let run_mut = store.runs.get_mut(&run_id).expect("run exists");
+        run_mut.status = RunStatus::WaitingInput;
+        run_mut.current_node_id = Some(node_id);
+        run_mut.input_prompt = Some(prompt.clone());
+        run_mut.finished_at = None;
+        let canvas = store.canvases.get_mut(&canvas_id).expect("canvas exists");
+        canvas.status = RunStatus::WaitingInput;
+        Notification {
+            id: Uuid::new_v4(),
+            title: "Run waiting for input".to_string(),
+            message: format!("{canvas_name} is waiting for a local input: {prompt}."),
+            severity: "info".to_string(),
+            created_at: now(),
+            run_id: Some(run_id),
+            canvas_id: Some(canvas_id),
+        }
+    } else {
+        let canvas = store
+            .canvases
+            .get_mut(&canvas_id)
+            .ok_or_else(|| not_found_error("Canvas was not found"))?;
+        canvas.status = RunStatus::Succeeded;
+        Notification {
+            id: Uuid::new_v4(),
+            title: "Run completed".to_string(),
+            message: format!(
+                "{submitted_node_name} received your submission. {canvas_name} run completed successfully."
+            ),
+            severity: "success".to_string(),
+            created_at: now(),
+            run_id: Some(run_id),
+            canvas_id: Some(canvas_id),
+        }
+    };
+    store.notifications.insert(notification.id, notification);
+    persist_candidate(&state, &mut store, previous)?;
+    Ok(Json(store.runs.get(&run_id).cloned().unwrap_or(run)))
 }
 
 async fn start_run(
@@ -1215,7 +1887,7 @@ async fn start_run(
     let previous = store.clone();
     let canvas = store
         .canvases
-        .get_mut(&canvas_id)
+        .get(&canvas_id)
         .ok_or_else(|| not_found_error("Canvas was not found"))?;
     if input.entrypoint != "default" {
         return Err(HostError::new(
@@ -1229,7 +1901,7 @@ async fn start_run(
         return Err(HostError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "ENTRYPOINT_REQUIRED",
-            "A default entrypoint is required",
+            "This canvas has no manual entrypoint. Configure an entrypoint before running.",
             false,
         ));
     }
@@ -1241,14 +1913,26 @@ async fn start_run(
             false,
         ));
     }
-    if matches!(canvas.status, RunStatus::Running) {
+    if let Err(reason) = validate_canvas_graph(&store, canvas_id) {
+        return Err(HostError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "GRAPH_INVALID",
+            reason,
+            false,
+        ));
+    }
+    if matches!(canvas.status, RunStatus::Running | RunStatus::WaitingInput) {
         return Err(HostError::new(
             StatusCode::CONFLICT,
             "RUN_ALREADY_ACTIVE",
-            "A run is already active for this canvas",
+            "A run is already active or waiting for input on this canvas",
             true,
         ));
     }
+    let canvas = store
+        .canvases
+        .get_mut(&canvas_id)
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
     canvas.status = RunStatus::Running;
     let run = Run {
         id: Uuid::new_v4(),
@@ -1257,11 +1941,15 @@ async fn start_run(
         status: RunStatus::Running,
         started_at: now(),
         finished_at: None,
+        current_node_id: None,
+        input_prompt: None,
+        result: None,
+        completed_node_ids: Vec::new(),
     };
     store.runs.insert(run.id, run.clone());
     store.run_idempotency.insert(key, run.id);
     persist_candidate(&state, &mut store, previous)?;
-    schedule_run_completion(state.clone(), run.id, remaining_run_delay(&run));
+    schedule_run_execution(state.clone(), run.id);
     Ok(Json(run))
 }
 
@@ -1286,11 +1974,11 @@ async fn main() {
             .runs
             .values()
             .filter(|run| matches!(run.status, RunStatus::Running))
-            .map(|run| (run.id, remaining_run_delay(run)))
+            .map(|run| run.id)
             .collect::<Vec<_>>()
     };
-    for (run_id, delay) in recovering_runs {
-        schedule_run_completion(state.clone(), run_id, delay);
+    for run_id in recovering_runs {
+        schedule_run_execution(state.clone(), run_id);
     }
     let app = router(state, security);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:4317")
@@ -1310,7 +1998,13 @@ async fn main() {
 fn router(state: AppState, security: SecurityConfig) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(security.allowed_origin.clone())
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::PUT])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::PUT,
+            Method::DELETE,
+        ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
     Router::new()
         .route("/api/health", get(health))
@@ -1320,15 +2014,27 @@ fn router(state: AppState, security: SecurityConfig) -> Router {
             "/api/workspaces",
             get(list_workspaces).post(create_workspace),
         )
-        .route("/api/workspaces/{workspace_id}", patch(rename_workspace))
+        .route(
+            "/api/workspaces/{workspace_id}",
+            patch(rename_workspace).delete(delete_workspace),
+        )
         .route(
             "/api/workspaces/{workspace_id}/canvases",
             get(list_canvases).post(create_canvas),
         )
         .route("/api/canvases/{canvas_id}/nodes", post(create_node))
+        .route(
+            "/api/nodes/{node_id}",
+            patch(update_node).delete(delete_node),
+        )
+        .route("/api/nodes/{node_id}/ports", post(create_port))
         .route("/api/canvases/{canvas_id}/edges", post(create_edge))
+        .route("/api/edges/{edge_id}", delete(delete_edge))
         .route("/api/canvases/{canvas_id}/revisions", post(save_revision))
-        .route("/api/canvases/{canvas_id}", patch(rename_canvas))
+        .route(
+            "/api/canvases/{canvas_id}",
+            patch(rename_canvas).delete(delete_canvas),
+        )
         .route(
             "/api/canvases/{canvas_id}/entrypoint",
             axum::routing::put(set_default_entrypoint),
@@ -1337,6 +2043,7 @@ fn router(state: AppState, security: SecurityConfig) -> Router {
             "/api/canvases/{canvas_id}/runs",
             get(list_runs).post(start_run),
         )
+        .route("/api/runs/{run_id}/input", post(submit_run_input))
         .layer(middleware::from_fn_with_state(security, authenticate))
         .layer(cors)
         .with_state(state)
@@ -1356,6 +2063,82 @@ mod tests {
 
     fn test_security() -> SecurityConfig {
         SecurityConfig::new(TEST_TOKEN.to_string(), TEST_ORIGIN).unwrap()
+    }
+
+    fn store_port_id(state: &AppState, node_id: Uuid, name: &str) -> Uuid {
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .nodes
+            .get(&node_id)
+            .and_then(|node| node.ports.iter().find(|port| port.name == name))
+            .map(|port| port.id)
+            .expect("test port exists")
+    }
+
+    #[test]
+    fn text_output_reads_value_from_connected_text_input() {
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let output_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let output_ports = default_ports(output_id, "output.text");
+        let input_output_id = input_ports
+            .iter()
+            .find(|port| port.name == "Text")
+            .unwrap()
+            .id;
+        let output_input_id = output_ports
+            .iter()
+            .find(|port| port.name == "Input")
+            .unwrap()
+            .id;
+        let mut config = serde_json::Map::new();
+        config.insert(
+            "inputValue".to_string(),
+            serde_json::Value::String("Hello World".to_string()),
+        );
+        let mut store = Store::default();
+        store.nodes.insert(
+            input_id,
+            CanvasNode {
+                id: input_id,
+                canvas_id,
+                name: "Text Input".to_string(),
+                kind: "input.text".to_string(),
+                ports: input_ports,
+                config,
+            },
+        );
+        store.nodes.insert(
+            output_id,
+            CanvasNode {
+                id: output_id,
+                canvas_id,
+                name: "Text Output".to_string(),
+                kind: "output.text".to_string(),
+                ports: output_ports,
+                config: serde_json::Map::new(),
+            },
+        );
+        store.edges.insert(
+            Uuid::new_v4(),
+            CanvasEdge {
+                id: Uuid::new_v4(),
+                canvas_id,
+                source_node_id: input_id,
+                source_port_id: input_output_id,
+                target_node_id: output_id,
+                target_port_id: output_input_id,
+                kind: PortKind::Data,
+            },
+        );
+
+        assert_eq!(
+            resolve_text_output(&store, canvas_id).unwrap().as_deref(),
+            Some("Hello World")
+        );
     }
 
     #[test]
@@ -1514,6 +2297,8 @@ mod tests {
             canvas_id,
             name: "node".to_string(),
             kind: "agent.task".to_string(),
+            ports: vec![],
+            config: serde_json::Map::new(),
         };
         let mut left = Store::default();
         left.nodes.insert(first_id, node(first_id));
@@ -1524,7 +2309,10 @@ mod tests {
                 id: first_edge_id,
                 canvas_id,
                 source_node_id: first_id,
+                source_port_id: first_id,
                 target_node_id: second_id,
+                target_port_id: second_id,
+                kind: PortKind::Data,
             },
         );
         left.edges.insert(
@@ -1533,7 +2321,10 @@ mod tests {
                 id: second_edge_id,
                 canvas_id,
                 source_node_id: second_id,
+                source_port_id: second_id,
                 target_node_id: first_id,
+                target_port_id: first_id,
+                kind: PortKind::Data,
             },
         );
         let mut right = Store::default();
@@ -1545,7 +2336,10 @@ mod tests {
                 id: second_edge_id,
                 canvas_id,
                 source_node_id: second_id,
+                source_port_id: second_id,
                 target_node_id: first_id,
+                target_port_id: first_id,
+                kind: PortKind::Data,
             },
         );
         right.edges.insert(
@@ -1554,7 +2348,10 @@ mod tests {
                 id: first_edge_id,
                 canvas_id,
                 source_node_id: first_id,
+                source_port_id: first_id,
                 target_node_id: second_id,
+                target_port_id: second_id,
+                kind: PortKind::Data,
             },
         );
         let left_json = graph_json_for_canvas(&left, canvas_id);
@@ -1601,6 +2398,8 @@ mod tests {
                     canvas_id,
                     name: "Start".to_string(),
                     kind: "trigger.start".to_string(),
+                    ports: default_ports(start_id, "trigger.start"),
+                    config: serde_json::Map::new(),
                 },
             );
         }
@@ -1642,7 +2441,10 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "sourceNodeId": start_id,
-                            "targetNodeId": node.id
+                            "sourcePortId": store_port_id(&state, start_id, "Start"),
+                            "targetNodeId": node.id,
+                            "targetPortId": store_port_id(&state, node.id, "Start"),
+                            "kind": "flow"
                         })
                         .to_string(),
                     ))
@@ -1668,6 +2470,167 @@ mod tests {
             serde_json::from_str(&graph_json_for_canvas(&store, canvas_id)).unwrap();
         assert_eq!(graph["nodes"].as_array().unwrap().len(), 2);
         assert_eq!(graph["edges"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn graph_commands_delete_edges_and_nodes_safely() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        let start_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let edge_id = Uuid::new_v4();
+        let start_ports = default_ports(start_id, "trigger.start");
+        let node_ports = default_ports(node_id, "task.manual");
+        let start_output_id = start_ports
+            .iter()
+            .find(|port| port.name == "Start")
+            .unwrap()
+            .id;
+        let node_input_id = node_ports
+            .iter()
+            .find(|port| port.name == "Start")
+            .unwrap()
+            .id;
+        {
+            let mut store = state.inner.lock().unwrap();
+            store.canvases.insert(
+                canvas_id,
+                Canvas {
+                    id: canvas_id,
+                    workspace_id: Uuid::new_v4(),
+                    name: "Canvas".to_string(),
+                    status: RunStatus::Idle,
+                    default_entrypoint_node_id: Some(start_id),
+                    revision: 0,
+                    draft_revision: 0,
+                    draft_dirty: false,
+                    updated_at: now(),
+                },
+            );
+            store.nodes.insert(
+                start_id,
+                CanvasNode {
+                    id: start_id,
+                    canvas_id,
+                    name: "Start".to_string(),
+                    kind: "trigger.start".to_string(),
+                    ports: start_ports,
+                    config: serde_json::Map::new(),
+                },
+            );
+            store.nodes.insert(
+                node_id,
+                CanvasNode {
+                    id: node_id,
+                    canvas_id,
+                    name: "Review".to_string(),
+                    kind: "task.manual".to_string(),
+                    ports: node_ports,
+                    config: serde_json::Map::new(),
+                },
+            );
+            store.edges.insert(
+                edge_id,
+                CanvasEdge {
+                    id: edge_id,
+                    canvas_id,
+                    source_node_id: start_id,
+                    source_port_id: start_output_id,
+                    target_node_id: node_id,
+                    target_port_id: node_input_id,
+                    kind: PortKind::Flow,
+                },
+            );
+        }
+
+        let app = router(state.clone(), test_security());
+        let delete_default = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/nodes/{start_id}"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_default.status(), StatusCode::NO_CONTENT);
+
+        let delete_node = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/nodes/{node_id}"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_node.status(), StatusCode::NO_CONTENT);
+
+        let store = state.inner.lock().unwrap();
+        assert!(!store.nodes.contains_key(&start_id));
+        assert!(!store.nodes.contains_key(&node_id));
+        assert!(!store.edges.contains_key(&edge_id));
+        let canvas = store.canvases.get(&canvas_id).unwrap();
+        assert_eq!(canvas.default_entrypoint_node_id, None);
+        assert_eq!(canvas.draft_revision, 2);
+        assert!(canvas.draft_dirty);
+    }
+
+    #[tokio::test]
+    async fn start_run_requires_manual_entrypoint_without_rejecting_empty_canvas_as_corrupt() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        {
+            let mut store = state.inner.lock().unwrap();
+            store.canvases.insert(
+                canvas_id,
+                Canvas {
+                    id: canvas_id,
+                    workspace_id: Uuid::new_v4(),
+                    name: "Library Canvas".to_string(),
+                    status: RunStatus::Idle,
+                    default_entrypoint_node_id: None,
+                    revision: 0,
+                    draft_revision: 0,
+                    draft_dirty: false,
+                    updated_at: now(),
+                },
+            );
+        }
+
+        let app = router(state, test_security());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/runs"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"revision":0,"entrypoint":"default","idempotencyKey":"no-entry"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["code"], "ENTRYPOINT_REQUIRED");
+        assert_eq!(
+            body["message"],
+            "This canvas has no manual entrypoint. Configure an entrypoint before running."
+        );
     }
 
     #[tokio::test]
@@ -1703,6 +2666,8 @@ mod tests {
                     canvas_id,
                     name: "A".to_string(),
                     kind: "task.manual".to_string(),
+                    ports: default_ports(node_id, "task.manual"),
+                    config: serde_json::Map::new(),
                 },
             );
             store.nodes.insert(
@@ -1712,6 +2677,8 @@ mod tests {
                     canvas_id,
                     name: "A2".to_string(),
                     kind: "task.manual".to_string(),
+                    ports: default_ports(second_node_id, "task.manual"),
+                    config: serde_json::Map::new(),
                 },
             );
             store.nodes.insert(
@@ -1721,6 +2688,8 @@ mod tests {
                     canvas_id: other_canvas_id,
                     name: "B".to_string(),
                     kind: "task.manual".to_string(),
+                    ports: default_ports(other_node_id, "task.manual"),
+                    config: serde_json::Map::new(),
                 },
             );
         }
@@ -1763,7 +2732,10 @@ mod tests {
         );
         let valid = serde_json::json!({
             "sourceNodeId": node_id,
-            "targetNodeId": second_node_id
+            "sourcePortId": store_port_id(&state, node_id, "Result"),
+            "targetNodeId": second_node_id,
+            "targetPortId": store_port_id(&state, second_node_id, "Input"),
+            "kind": "data"
         });
         assert_eq!(send_edge(valid.clone()).await.status(), StatusCode::CREATED);
         assert_eq!(send_edge(valid).await.status(), StatusCode::CONFLICT);
@@ -1798,6 +2770,8 @@ mod tests {
             canvas_id,
             name: "Start".to_string(),
             kind: "trigger.start".to_string(),
+            ports: vec![],
+            config: serde_json::Map::new(),
         };
         {
             let mut store = state.inner.lock().unwrap();
@@ -1810,6 +2784,8 @@ mod tests {
                     canvas_id,
                     name: "Task".to_string(),
                     kind: "task.manual".to_string(),
+                    ports: vec![],
+                    config: serde_json::Map::new(),
                 },
             );
             let edge_id = Uuid::new_v4();
@@ -1819,7 +2795,10 @@ mod tests {
                     id: edge_id,
                     canvas_id,
                     source_node_id: node_id,
+                    source_port_id: node_id,
                     target_node_id: task_id,
+                    target_port_id: task_id,
+                    kind: PortKind::Flow,
                 },
             );
         }
@@ -2243,6 +3222,10 @@ mod tests {
                 status: RunStatus::Succeeded,
                 started_at: now(),
                 finished_at: Some(now()),
+                current_node_id: None,
+                input_prompt: None,
+                result: None,
+                completed_node_ids: Vec::new(),
             },
         );
         let mut snapshot = Snapshot::from(&run_store);
@@ -2441,6 +3424,10 @@ mod tests {
                 status: RunStatus::Succeeded,
                 started_at: now(),
                 finished_at: Some(now()),
+                current_node_id: None,
+                input_prompt: None,
+                result: None,
+                completed_node_ids: Vec::new(),
             },
         );
         state.persist(&store).unwrap();
@@ -2476,6 +3463,10 @@ mod tests {
                 status: RunStatus::Succeeded,
                 started_at: now(),
                 finished_at: Some(now()),
+                current_node_id: None,
+                input_prompt: None,
+                result: None,
+                completed_node_ids: Vec::new(),
             },
         );
         store
