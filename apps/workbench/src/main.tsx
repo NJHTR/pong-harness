@@ -894,7 +894,7 @@ function App() {
             <TextField label="Project name" autoFocus value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="e.g. huizhou-backend" />
             <button type="button" className="workspace-folder-picker" onClick={() => void chooseWorkspaceFolder()}>
               <FolderOpen aria-hidden="true" />
-              <span><strong>{workspaceParentPath || "Default: Documents/Seekwd Projects"}</strong><small>Optional: choose a different parent folder</small></span>
+              <span><strong>{workspaceParentPath || "Default: local Seekwd Projects folder"}</strong><small>Optional: choose a different parent folder</small></span>
               <ChevronRight aria-hidden="true" />
             </button>
           </div>
@@ -939,7 +939,7 @@ function App() {
         }
         className="workspace-dialog"
       >
-        <p className="workspace-trust-copy">Location: {workspaceCreateConfirmation?.parentPath || "Documents/Seekwd Projects"}</p>
+        <p className="workspace-trust-copy">Location: {workspaceCreateConfirmation?.parentPath || "Default local Seekwd Projects folder"}</p>
       </Dialog>
 
       <Dialog
