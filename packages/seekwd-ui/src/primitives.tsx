@@ -8,6 +8,7 @@ import {
   type HTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
+  type TextareaHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, CircleAlert, CircleCheck, Clock3, LoaderCircle, X } from "lucide-react";
@@ -105,6 +106,73 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
   },
 );
 TextField.displayName = "TextField";
+
+export interface AutoGrowTextAreaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
+  /** Maximum height in pixels. Defaults to a viewport-relative composer limit. */
+  maxHeight?: number;
+}
+
+/**
+ * A textarea that grows with its content until a responsive cap, then owns its
+ * own scroll. Keeping this in the shared package prevents native resize handles
+ * and fixed-height inputs from diverging between UI Lab and the workbench.
+ */
+export const AutoGrowTextArea = forwardRef<HTMLTextAreaElement, AutoGrowTextAreaProps>(
+  ({ maxHeight, className = "", style, value, defaultValue, onChange, ...props }, ref) => {
+    const internalRef = useRef<HTMLTextAreaElement | null>(null);
+    const [height, setHeight] = useState(32);
+    const [overflowY, setOverflowY] = useState<"hidden" | "auto">("hidden");
+    const [responsiveMaxHeight, setResponsiveMaxHeight] = useState(() => {
+      if (typeof window === "undefined") return 240;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      return Math.max(96, Math.min(320, Math.floor(viewportHeight * 0.42)));
+    });
+
+    const setRef = (element: HTMLTextAreaElement | null) => {
+      internalRef.current = element;
+      if (typeof ref === "function") ref(element);
+      else if (ref) ref.current = element;
+    };
+
+    useEffect(() => {
+      const updateMaxHeight = () => {
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        setResponsiveMaxHeight(Math.max(96, Math.min(320, Math.floor(viewportHeight * 0.42))));
+      };
+      window.addEventListener("resize", updateMaxHeight);
+      window.visualViewport?.addEventListener("resize", updateMaxHeight);
+      return () => {
+        window.removeEventListener("resize", updateMaxHeight);
+        window.visualViewport?.removeEventListener("resize", updateMaxHeight);
+      };
+    }, []);
+
+    useEffect(() => {
+      const textarea = internalRef.current;
+      if (!textarea) return;
+      textarea.style.height = "0px";
+      const contentHeight = textarea.scrollHeight;
+      const cap = maxHeight ?? responsiveMaxHeight;
+      const nextHeight = Math.min(cap, Math.max(32, contentHeight));
+      textarea.style.height = `${nextHeight}px`;
+      setHeight(nextHeight);
+      setOverflowY(contentHeight > cap ? "auto" : "hidden");
+    }, [value, defaultValue, maxHeight, responsiveMaxHeight]);
+
+    return (
+      <textarea
+        ref={setRef}
+        className={`sk-auto-grow-textarea ${className}`}
+        value={value}
+        defaultValue={defaultValue}
+        onChange={onChange}
+        style={{ ...style, height: `${height}px`, maxHeight: `${maxHeight ?? responsiveMaxHeight}px`, overflowY }}
+        {...props}
+      />
+    );
+  },
+);
+AutoGrowTextArea.displayName = "AutoGrowTextArea";
 
 export interface CheckboxProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "type"> {
   label: ReactNode;
@@ -397,6 +465,5 @@ export function Notification({ title, children, icon, time = "now", duration = 5
     <span className="sk-macos-notification__icon" aria-hidden="true">{icon}</span>
     <span className="sk-macos-notification__content"><strong>{title}</strong><span>{children}</span></span>
     <time>{time}</time>
-    {onDismiss ? <button type="button" className="sk-macos-notification__close" aria-label={`Dismiss ${title}`} onClick={(event) => { event.stopPropagation(); dismiss(); }}><X /></button> : null}
   </div>;
 }

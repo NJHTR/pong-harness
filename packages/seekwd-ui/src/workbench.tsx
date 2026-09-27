@@ -1,4 +1,4 @@
-import { type HTMLAttributes, type ReactNode } from "react";
+import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 export interface WindowFrameProps extends HTMLAttributes<HTMLDivElement> {
@@ -8,14 +8,39 @@ export interface WindowFrameProps extends HTMLAttributes<HTMLDivElement> {
   sidebar?: ReactNode;
   inspector?: ReactNode;
   bottomPanel?: ReactNode;
+  resizableInspector?: boolean;
+  resizableBottomPanel?: boolean;
   onClose?: () => void;
   onMinimize?: () => void;
   onZoom?: () => void;
 }
 
-export function WindowFrame({ title, subtitle, toolbar, sidebar, inspector, bottomPanel, onClose, onMinimize, onZoom, children, className = "", ...props }: WindowFrameProps) {
+export function WindowFrame({ title, subtitle, toolbar, sidebar, inspector, bottomPanel, resizableInspector = Boolean(inspector), resizableBottomPanel = Boolean(bottomPanel), onClose, onMinimize, onZoom, children, className = "", style, ...props }: WindowFrameProps) {
+  const [inspectorWidth, setInspectorWidth] = useState(260);
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(250);
+  const resizeState = useRef<"inspector" | "bottom" | null>(null);
+  const startPoint = useRef({ x: 0, y: 0, size: 0 });
+  const beginResize = (type: "inspector" | "bottom", event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeState.current = type;
+    startPoint.current = { x: event.clientX, y: event.clientY, size: type === "inspector" ? inspectorWidth : bottomPanelHeight };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (resizeState.current === "inspector") {
+      setInspectorWidth(Math.max(220, Math.min(440, startPoint.current.size - (event.clientX - startPoint.current.x))));
+    } else if (resizeState.current === "bottom") {
+      setBottomPanelHeight(Math.max(150, Math.min(Math.round(window.innerHeight * 0.62), startPoint.current.size - (event.clientY - startPoint.current.y))));
+    }
+  };
+  const endResize = () => { resizeState.current = null; };
+  const frameStyle = {
+    ...style,
+    "--sk-inspector-width": `${inspectorWidth}px`,
+    "--sk-bottom-panel-height": `${bottomPanelHeight}px`,
+  } as React.CSSProperties;
   return (
-    <div className={`sk-window ${className}`} {...props}>
+    <div className={`sk-window ${className}`} style={frameStyle} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} {...props}>
       <header className="sk-titlebar">
         <div className="sk-traffic" aria-label="Window controls" role="group">
           <button type="button" className="sk-traffic__light sk-traffic__close" aria-label="Close window" onClick={onClose} tabIndex={onClose ? 0 : -1}>
@@ -40,9 +65,9 @@ export function WindowFrame({ title, subtitle, toolbar, sidebar, inspector, bott
       <div className={`sk-workbench ${sidebar ? "" : "sk-workbench--no-sidebar"} ${inspector ? "" : "sk-workbench--no-inspector"}`}>
         {sidebar ? <aside className="sk-sidebar">{sidebar}</aside> : null}
         <main className="sk-workbench__main">{children}</main>
-        {inspector ? <aside className="sk-inspector">{inspector}</aside> : null}
+        {inspector ? <aside className="sk-inspector">{resizableInspector ? <div className="sk-panel-resize-handle sk-panel-resize-handle--inspector" role="separator" aria-label="Resize inspector" onPointerDown={(event) => beginResize("inspector", event)} /> : null}{inspector}</aside> : null}
       </div>
-      {bottomPanel ? <section className="sk-bottom-panel">{bottomPanel}</section> : null}
+      {bottomPanel ? <section className="sk-bottom-panel" style={{ height: `${bottomPanelHeight}px` }}>{resizableBottomPanel ? <div className="sk-panel-resize-handle sk-panel-resize-handle--bottom" role="separator" aria-label="Resize run output" onPointerDown={(event) => beginResize("bottom", event)} /> : null}{bottomPanel}</section> : null}
     </div>
   );
 }
