@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build --no-bundle"
+    "desktop:build": "tauri build",
+    "desktop:dev:build": "tauri build --config src-tauri/tauri.dev.conf.json"
   },
   "dependencies": {
     "@seekwd/client": "workspace:*",

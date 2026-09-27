@@ -7,6 +7,7 @@
     "beforeDevCommand": "pnpm --filter @seekwd/workbench dev",
     "devUrl": "http://127.0.0.1:4174",
     "beforeBuildCommand": "pnpm --filter @seekwd/workbench build",
+    "beforeBundleCommand": "cargo build -p pong-host --release",
     "frontendDist": "../dist"
   },
   "app": {
@@ -18,6 +19,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": {
+      "../../../target/release/pong-host.exe": "pong-host.exe"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
