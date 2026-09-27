@@ -372,9 +372,10 @@ export interface DialogProps {
   children: ReactNode;
   onClose: () => void;
   footer?: ReactNode;
+  className?: string;
 }
 
-export function Dialog({ open, title, description, children, onClose, footer }: DialogProps) {
+export function Dialog({ open, title, description, children, onClose, footer, className = "" }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
@@ -386,7 +387,7 @@ export function Dialog({ open, title, description, children, onClose, footer }: 
   const titleId = useId();
   return <><span hidden ref={(element) => {
     if (element) setPortalHost(element.closest<HTMLElement>("[data-sk-theme]") ?? document.body);
-  }} />{portalHost ? createPortal(<dialog ref={ref} className="sk-dialog" aria-labelledby={titleId} onClose={onClose} onClick={(event) => {
+  }} />{portalHost ? createPortal(<dialog ref={ref} className={`sk-dialog ${className}`} aria-labelledby={titleId} onClose={onClose} onClick={(event) => {
     if (event.target === ref.current) onClose();
   }}><header><strong id={titleId}>{title}</strong><IconButton label="Close dialog" size="small" onClick={onClose}><X /></IconButton></header>{description ? <p className="sk-dialog__description">{description}</p> : null}<div className="sk-dialog__body">{children}</div>{footer ? <footer>{footer}</footer> : null}</dialog>, portalHost) : null}</>;
 }

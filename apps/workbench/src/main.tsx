@@ -864,6 +864,7 @@ function App() {
               : null}
           </>
         }
+        className="workspace-dialog"
       >
         <SegmentedControl
           label="Project action"
