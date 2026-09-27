@@ -397,7 +397,7 @@ button, input, textarea { font-family: inherit; }
   position: fixed;
   z-index: 190;
   top: 10px;
-  right: 10px;
+  right: clamp(4px, 0.45vw, 8px);
   width: min(346px, calc(100vw - 20px));
   display: flex;
   flex-direction: column;
