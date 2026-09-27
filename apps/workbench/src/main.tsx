@@ -103,6 +103,14 @@ interface SettingsState {
   defaultProjectParent: string;
 }
 
+interface AgentSettings {
+  name: string;
+  endpoint: string;
+  model: string;
+  environment: string;
+  instructions: string;
+}
+
 interface GraphValidation {
   valid: boolean;
   message: string;
@@ -153,6 +161,15 @@ function App() {
   const [workspaceCreateConfirmation, setWorkspaceCreateConfirmation] = useState<{ name: string; parentPath: string }>();
   const [pendingWorkspace, setPendingWorkspace] = useState<{ name: string; path: string }>();
   const [composerScopeEnabled, setComposerScopeEnabled] = useState(true);
+  const [agentSettings, setAgentSettings] = useState<AgentSettings>({
+    name: "Local Agent",
+    endpoint: "",
+    model: "",
+    environment: "Response only",
+    instructions: "",
+  });
+  const [agentKeyConfigured, setAgentKeyConfigured] = useState(false);
+  const [agentResponse, setAgentResponse] = useState("");
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
   const [portDirection, setPortDirection] = useState<"input" | "output">("input");
@@ -238,6 +255,29 @@ function App() {
       // Preferences remain usable for the current session.
     }
   }, [settings]);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("seekwd.agent.settings");
+      if (stored) {
+        const parsed = JSON.parse(stored) as Partial<AgentSettings>;
+        setAgentSettings((current) => ({ ...current, ...parsed }));
+      }
+    } catch {
+      // Ignore unavailable or invalid local preferences.
+    }
+    void invoke<boolean>("has_agent_api_key")
+      .then(setAgentKeyConfigured)
+      .catch(() => setAgentKeyConfigured(false));
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("seekwd.agent.settings", JSON.stringify(agentSettings));
+    } catch {
+      // Preferences remain usable for the current session.
+    }
+  }, [agentSettings]);
 
   const reportError = (error: unknown, fallback: string) => {
     const message = typeof error === "string"
@@ -665,6 +705,23 @@ function App() {
   const submitComposerRequest = async (value: string) => {
     const normalizedValue = value.trim();
     if (!normalizedValue) return;
+    if (agentKeyConfigured && agentSettings.endpoint.trim() && agentSettings.model.trim()) {
+      try {
+        const response = await invoke<string>("run_agent_prompt", {
+          endpoint: agentSettings.endpoint,
+          model: agentSettings.model,
+         prompt: normalizedValue,
+         workspaceName: activeWorkspace?.name ?? "Workspace",
+         environment: agentSettings.environment,
+          instructions: agentSettings.instructions,
+        });
+        setAgentResponse(response);
+        showNotice("Agent response received", `${agentSettings.name} returned a response.`, "success");
+      } catch (error) {
+        reportError(error, "Unable to run Agent request");
+      }
+      return;
+    }
     if (activeRun?.status === "waiting_input") {
       try {
         await client.submitRunInput({ runId: activeRun.id, value: normalizedValue });
@@ -869,6 +926,9 @@ function App() {
             workspaces={snapshot.workspaces}
             workspaceId={activeWorkspace?.id}
             scopeEnabled={composerScopeEnabled}
+            agentConfigured={agentKeyConfigured && Boolean(agentSettings.endpoint.trim()) && Boolean(agentSettings.model.trim())}
+            agentName={agentSettings.name}
+            agentResponse={agentResponse}
             canvas={activeCanvas}
             openCanvases={snapshot.canvases.filter((item) => openCanvasIds.includes(item.id))}
             nodes={canvasNodes}
@@ -923,7 +983,7 @@ function App() {
             onCloseCanvas={closeCanvasTab}
           />
         ) : (
-          <SurfacePage surface={surface} workspaceName={activeWorkspace?.name ?? "Workspace"} settings={settings} onSettingsChange={(key, value) => setSettings((current) => ({ ...current, [key]: value }))} onNotice={showNotice} />
+          <SurfacePage surface={surface} workspaceName={activeWorkspace?.name ?? "Workspace"} settings={settings} onSettingsChange={(key, value) => setSettings((current) => ({ ...current, [key]: value }))} agentSettings={agentSettings} agentKeyConfigured={agentKeyConfigured} onAgentSettingsChange={(key, value) => setAgentSettings((current) => ({ ...current, [key]: value }))} onAgentKeyConfigured={setAgentKeyConfigured} onNotice={showNotice} />
         )}
       </WindowFrame>
 
@@ -1288,7 +1348,7 @@ function RuntimeIcon({ state }: { state: RuntimeState }) {
 }
 
 function CanvasSurface({
-  workspaceName, workspaces, workspaceId, scopeEnabled, canvas, openCanvases, nodes, edges, selectedNodeId, selectedEdgeId, connectionSource, nodeLibraryOpen, runHistoryOpen, runs, runPanelOpen, runState, currentNodeId,
+  workspaceName, workspaces, workspaceId, scopeEnabled, agentConfigured, agentName, agentResponse, canvas, openCanvases, nodes, edges, selectedNodeId, selectedEdgeId, connectionSource, nodeLibraryOpen, runHistoryOpen, runs, runPanelOpen, runState, currentNodeId,
   graphValidation, otherActiveRuns, onSelectNode, onSelectEdge, onDeleteEdge, onPortConnect, onNodeMoved, onToggleNodeLibrary, onCloseNodeLibrary, onAddNode, onToggleRunHistory, onCloseRunHistory, onRun,
   onToggleRunPanel, onAddCanvas, onSaveRevision, onCancelConnection, onSelectCanvas, onCloseCanvas, onComposerWorkspaceChange, onComposerScopeClear, onComposerScopeEnable, onComposerNewWorkspace, onComposerSubmit,
 }: {
@@ -1296,6 +1356,9 @@ function CanvasSurface({
   workspaces: Workspace[];
   workspaceId?: string;
   scopeEnabled: boolean;
+  agentConfigured: boolean;
+  agentName: string;
+  agentResponse: string;
   canvas?: Canvas;
   openCanvases: Canvas[];
   nodes: WireNode[];
@@ -1531,6 +1594,9 @@ function CanvasSurface({
         workspaces={workspaces}
         workspaceId={workspaceId}
         scopeEnabled={scopeEnabled}
+        agentConfigured={agentConfigured}
+        agentName={agentName}
+        agentResponse={agentResponse}
         onWorkspaceChange={onComposerWorkspaceChange}
         onScopeClear={onComposerScopeClear}
         onScopeEnable={onComposerScopeEnable}
@@ -1627,6 +1693,9 @@ function AgentComposer({
   workspaces,
   workspaceId,
   scopeEnabled,
+  agentConfigured,
+  agentName,
+  agentResponse,
   onWorkspaceChange,
   onScopeClear,
   onScopeEnable,
@@ -1637,6 +1706,9 @@ function AgentComposer({
   workspaces: Workspace[];
   workspaceId?: string;
   scopeEnabled: boolean;
+  agentConfigured: boolean;
+  agentName: string;
+  agentResponse: string;
   onWorkspaceChange: (workspace: Workspace) => void;
   onScopeClear: () => void;
   onScopeEnable: () => void;
@@ -1679,9 +1751,10 @@ function AgentComposer({
         ) : null}
       </div>
       <div className="agent-composer__surface">
+        {agentResponse ? <div className="agent-composer__response"><strong>{agentName}</strong><p>{agentResponse}</p></div> : null}
         <AutoGrowTextArea
           aria-label="Message the agent"
-          placeholder="Send a value to the active canvas"
+          placeholder={agentConfigured ? "Ask the configured Agent" : "Send a value to the active canvas"}
           value={value}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
@@ -1691,7 +1764,7 @@ function AgentComposer({
             }
           }}
         />
-        <footer><Tooltip content="Attach context"><IconButton label="Attach context" size="small" disabled><Paperclip /></IconButton></Tooltip><span className="agent-composer__unavailable">Canvas input</span><span className="agent-composer__spacer" /><Tooltip content="Send value"><IconButton label="Send value" active={Boolean(value.trim())} onClick={submit} disabled={!value.trim()}><ArrowUp /></IconButton></Tooltip></footer>
+        <footer><Tooltip content="Attach context"><IconButton label="Attach context" size="small" disabled><Paperclip /></IconButton></Tooltip><span className="agent-composer__unavailable">{agentConfigured ? agentName : "Canvas input"}</span><span className="agent-composer__spacer" /><Tooltip content={agentConfigured ? "Send to Agent" : "Send value"}><IconButton label={agentConfigured ? "Send to Agent" : "Send value"} active={Boolean(value.trim())} onClick={submit} disabled={!value.trim()}><ArrowUp /></IconButton></Tooltip></footer>
       </div>
     </section>
   );
@@ -1736,8 +1809,8 @@ function RunPanel({ run, canvas, nodes, value, onValueChange, onSubmit }: { run?
   );
 }
 
-function SurfacePage({ surface, workspaceName, settings, onSettingsChange, onNotice }: { surface: Exclude<Surface, "canvas">; workspaceName: string; settings: SettingsState; onSettingsChange: (key: keyof SettingsState, value: SettingsState[keyof SettingsState]) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
-  if (surface === "settings") return <SettingsPage settings={settings} onChange={onSettingsChange} onDefaultProjectParentChange={(path) => onSettingsChange("defaultProjectParent", path)} onNotice={onNotice} />;
+function SurfacePage({ surface, workspaceName, settings, onSettingsChange, agentSettings, agentKeyConfigured, onAgentSettingsChange, onAgentKeyConfigured, onNotice }: { surface: Exclude<Surface, "canvas">; workspaceName: string; settings: SettingsState; onSettingsChange: (key: keyof SettingsState, value: SettingsState[keyof SettingsState]) => void; agentSettings: AgentSettings; agentKeyConfigured: boolean; onAgentSettingsChange: (key: keyof AgentSettings, value: string) => void; onAgentKeyConfigured: (configured: boolean) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+  if (surface === "settings") return <SettingsPage settings={settings} onChange={onSettingsChange} agentSettings={agentSettings} agentKeyConfigured={agentKeyConfigured} onAgentSettingsChange={onAgentSettingsChange} onAgentKeyConfigured={onAgentKeyConfigured} onDefaultProjectParentChange={(path) => onSettingsChange("defaultProjectParent", path)} onNotice={onNotice} />;
   const config: Record<Exclude<Surface, "canvas" | "settings">, { eyebrow: string; title: string; description: string; icon: ReactNode }> = {
     automations: { eyebrow: "Workspace automation", title: "Automations", description: "Schedule canvas entrypoints and keep recurring work visible.", icon: <CalendarClock /> },
     extensions: { eyebrow: "Workspace capabilities", title: "Extensions", description: "Connect approved capabilities to the active workspace.", icon: <Blocks /> },
@@ -1757,7 +1830,10 @@ function SurfaceContent({ surface, onNotice }: { surface: Exclude<Surface, "canv
   return <div className="agent-list"><div className="agent-row"><div className="agent-avatar"><Bot /></div><div><strong>Agent Runtime</strong><span>Natural-language graph changes are not connected in this MVP.</span><small>Use node, port, edge, revision and Run actions directly.</small></div><Switch label="" aria-label="Agent runtime unavailable" disabled /></div></div>;
 }
 
-function SettingsPage({ settings, onChange, onDefaultProjectParentChange, onNotice }: { settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void; onDefaultProjectParentChange: (path: string) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+function SettingsPage({ settings, onChange, agentSettings, agentKeyConfigured, onAgentSettingsChange, onAgentKeyConfigured, onDefaultProjectParentChange, onNotice }: { settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void; agentSettings: AgentSettings; agentKeyConfigured: boolean; onAgentSettingsChange: (key: keyof AgentSettings, value: string) => void; onAgentKeyConfigured: (configured: boolean) => void; onDefaultProjectParentChange: (path: string) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+  const [apiKey, setApiKey] = useState("");
+  const [savingApiKey, setSavingApiKey] = useState(false);
+  const [testingAgent, setTestingAgent] = useState(false);
   const chooseDefaultProjectParent = async () => {
     try {
       const path = await open({ directory: true, multiple: false, title: "Choose default project folder" });
@@ -1769,7 +1845,31 @@ function SettingsPage({ settings, onChange, onDefaultProjectParentChange, onNoti
       onNotice("Unable to choose project folder", typeof error === "string" ? error : "The folder picker could not be opened.", "error");
     }
   };
-  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><div className="settings-path-row"><div><strong>Default project folder</strong><p>{settings.defaultProjectParent || "User home folder / SeekwdProjects"}</p><small>New projects use this folder unless you choose another location.</small></div><div className="settings-path-actions"><Button size="small" leadingIcon={<FolderOpen />} onClick={() => void chooseDefaultProjectParent()}>Choose folder</Button><Button size="small" onClick={() => onDefaultProjectParentChange("")} disabled={!settings.defaultProjectParent}>Reset</Button></div></div><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection></div></div></div>;
+  const saveApiKey = async () => {
+    setSavingApiKey(true);
+    try {
+      await invoke("save_agent_api_key", { apiKey });
+      onAgentKeyConfigured(Boolean(apiKey.trim()));
+      setApiKey("");
+      onNotice(apiKey.trim() ? "Agent API key saved" : "Agent API key removed", "The key is stored in the local Windows Credential Manager.", "success");
+    } catch (error) {
+      onNotice("Unable to save Agent API key", typeof error === "string" ? error : "The local credential store is unavailable.", "error");
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+  const testAgent = async () => {
+    setTestingAgent(true);
+    try {
+      const message = await invoke<string>("test_agent_provider", { endpoint: agentSettings.endpoint, model: agentSettings.model });
+      onNotice("Agent connection verified", message, "success");
+    } catch (error) {
+      onNotice("Agent connection failed", typeof error === "string" ? error : "Unable to reach the configured Agent endpoint.", "error");
+    } finally {
+      setTestingAgent(false);
+    }
+  };
+  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><div className="settings-path-row"><div><strong>Default project folder</strong><p>{settings.defaultProjectParent || "User home folder / SeekwdProjects"}</p><small>New projects use this folder unless you choose another location.</small></div><div className="settings-path-actions"><Button size="small" leadingIcon={<FolderOpen />} onClick={() => void chooseDefaultProjectParent()}>Choose folder</Button><Button size="small" onClick={() => onDefaultProjectParentChange("")} disabled={!settings.defaultProjectParent}>Reset</Button></div></div><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection><SurfaceSection title="Agent provider" description="Connect a local OpenAI-compatible Agent endpoint. API keys stay in the Windows Credential Manager."><div className="agent-settings-grid"><TextField label="Agent name" value={agentSettings.name} onChange={(event) => onAgentSettingsChange("name", event.target.value)} placeholder="Local Agent" /><TextField label="Endpoint" value={agentSettings.endpoint} onChange={(event) => onAgentSettingsChange("endpoint", event.target.value)} placeholder="https://api.example.com/v1" /><TextField label="Model" value={agentSettings.model} onChange={(event) => onAgentSettingsChange("model", event.target.value)} placeholder="gpt-4o-mini" /><TextField label="API key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={agentKeyConfigured ? "Saved in Windows Credential Manager" : "Enter API key"} description={agentKeyConfigured ? "A key is configured. Enter a new key to replace it, or clear and save to remove it." : "The key is never stored in browser storage or project files."} /></div><TextField label="Agent instructions" value={agentSettings.instructions} onChange={(event) => onAgentSettingsChange("instructions", event.target.value)} placeholder="Describe the response style or project conventions." /><label className="form-select"><span>Execution environment</span><select value={agentSettings.environment} onChange={(event) => onAgentSettingsChange("environment", event.target.value)}><option>Response only</option><option>Local Restricted (planned tools)</option><option>Workspace Read/Write (planned tools)</option></select></label><p className="settings-inline-note">The current connection can chat and propose work. File, shell and graph-editing tools are not granted yet.</p><div className="agent-settings-actions"><StatusBadge tone={agentKeyConfigured ? "success" : "neutral"} dot>{agentKeyConfigured ? "API key configured" : "API key not configured"}</StatusBadge><span className="agent-settings-spacer" /><Button size="small" onClick={() => void saveApiKey()} disabled={savingApiKey}>{savingApiKey ? "Saving..." : "Save key"}</Button><Button size="small" onClick={() => void testAgent()} disabled={testingAgent || !agentKeyConfigured || !agentSettings.endpoint.trim() || !agentSettings.model.trim()}>{testingAgent ? "Testing..." : "Test connection"}</Button></div></SurfaceSection></div></div></div>;
 }
 
 function SurfaceHeader({ eyebrow, title, description, icon, action }: { eyebrow: string; title: string; description: string; icon: ReactNode; action?: ReactNode }) {

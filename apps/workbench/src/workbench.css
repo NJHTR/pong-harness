@@ -287,6 +287,9 @@ button, input, textarea { font-family: inherit; }
 .agent-composer__new-workspace { width: 100%; margin-top: 5px; }
 .agent-composer__surface { min-height: 84px; padding: 9px 9px 7px; display: grid; grid-template-rows: auto 27px; border: .5px solid var(--sk-border); border-radius: 18px; background: color-mix(in srgb, var(--sk-bg-elevated) 86%, transparent); box-shadow: 0 8px 30px rgba(0,0,0,.12), inset 0 .5px 0 rgba(255,255,255,.35); backdrop-filter: blur(30px) saturate(150%); }
 .agent-composer__scope-row + .agent-composer__surface { border-radius: 0 0 18px 18px; }
+.agent-composer__response { max-height: 132px; margin: 0 0 7px; padding: 8px 9px; overflow: auto; border: 1px solid var(--sk-divider); border-radius: 9px; color: var(--sk-text-secondary); background: color-mix(in srgb, var(--sk-bg-panel) 72%, transparent); font-size: 10px; line-height: 1.45; }
+.agent-composer__response strong { display: block; margin-bottom: 3px; color: var(--sk-text-primary); font-size: 10px; }
+.agent-composer__response p { margin: 0; white-space: pre-wrap; }
 .agent-composer textarea {
   width: 100%;
   min-height: 32px;
@@ -418,6 +421,12 @@ button, input, textarea { font-family: inherit; }
 .settings-path-row p { margin: 0; overflow: hidden; color: var(--sk-text-secondary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-path-row small { color: var(--sk-text-tertiary); font-size: 9px; }
 .settings-path-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.agent-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; padding: 2px 0 12px; }
+.agent-settings-grid .sk-field { min-width: 0; }
+.agent-settings-actions { min-height: 42px; display: flex; align-items: center; gap: 7px; border-top: 1px solid var(--sk-divider); }
+.agent-settings-actions .sk-status { flex: 0 0 auto; }
+.agent-settings-spacer { flex: 1; }
+.settings-inline-note { margin: 8px 0 0; color: var(--sk-text-tertiary); font-size: 10px; line-height: 1.4; }
 .settings-content .sk-switch-row { min-height: 54px; padding: 10px 2px; border-bottom: 1px solid var(--sk-divider); }
 .settings-callout { min-height: 54px; margin-top: 14px; padding: 10px 12px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 1px solid var(--sk-border-subtle); border-radius: 7px; background: var(--sk-bg-panel); }
 .settings-callout > svg { width: 17px; height: 17px; color: var(--sk-accent); }
