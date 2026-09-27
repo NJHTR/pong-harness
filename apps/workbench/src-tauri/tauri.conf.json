@@ -23,6 +23,10 @@
       "../../../target/release/pong-host.exe": "pong-host.exe"
     },
     "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
+      },
       "webviewInstallMode": {
         "type": "embedBootstrapper"
       }
