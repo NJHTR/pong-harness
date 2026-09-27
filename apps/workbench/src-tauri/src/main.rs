@@ -62,16 +62,17 @@ fn spawn_host(app: &tauri::AppHandle, token: &str) -> io::Result<Child> {
     }
     Command::new(binary)
         .env("PONG_HOST_TOKEN", token)
-        .env("PONG_HOST_ALLOWED_ORIGIN", "http://tauri.localhost")
+        .env("PONG_HOST_ALLOWED_ORIGIN", "http://127.0.0.1:4174")
         .env("PONG_HOST_DB", database)
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
 }
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let token = host_token();
             let child = spawn_host(&app.handle(), &token)
@@ -84,6 +85,8 @@ fn main() {
             );
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Seekwd")
+                .decorations(false)
+                .transparent(false)
                 .inner_size(1440.0, 920.0)
                 .min_inner_size(1024.0, 680.0)
                 .initialization_script(&script)

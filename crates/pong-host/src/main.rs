@@ -77,11 +77,12 @@ impl SecurityConfig {
         let uri: Uri = origin
             .parse()
             .map_err(|_| "Invalid PONG_HOST_ALLOWED_ORIGIN")?;
-        if uri.scheme_str() != Some("http")
-            || uri.host() != Some("127.0.0.1")
-            || uri.port_u16().is_none()
-            || origin != format!("http://127.0.0.1:{}", uri.port_u16().unwrap())
-        {
+        let is_loopback_origin = uri.scheme_str() == Some("http")
+            && uri.host() == Some("127.0.0.1")
+            && uri.port_u16().is_some()
+            && origin == format!("http://127.0.0.1:{}", uri.port_u16().unwrap());
+        let is_tauri_desktop_origin = origin == "http://tauri.localhost";
+        if !is_loopback_origin && !is_tauri_desktop_origin {
             return Err("PONG_HOST_ALLOWED_ORIGIN must be an exact http://127.0.0.1:<port> origin");
         }
         let allowed_origin =

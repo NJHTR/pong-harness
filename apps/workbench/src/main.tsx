@@ -48,6 +48,8 @@ import {
 } from "lucide-react";
 import { createHttpHostClient, createLocalHostClient } from "@seekwd/client";
 import type { Canvas, CanvasEdge, CanvasNode as WireNode, HostSnapshot, Run, Workspace } from "@seekwd/protocol-schema";
+import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Button,
   AutoGrowTextArea,
@@ -74,6 +76,7 @@ const desktopHost = (globalThis as typeof globalThis & { __SEEKWD_HOST__?: { bas
 const client = import.meta.env.VITE_HOST_PROXY === "0"
   ? createLocalHostClient()
   : createHttpHostClient(desktopHost?.baseUrl ?? "", desktopHost?.token);
+const nativeWindow = getCurrentWindow();
 
 type Surface = "canvas" | "automations" | "extensions" | "settings" | "files" | "environments" | "agents";
 type RuntimeState = "idle" | "running" | "waiting" | "success" | "error";
@@ -141,7 +144,7 @@ function App() {
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>();
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [newWorkspacePath, setNewWorkspacePath] = useState("");
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
   const [portDirection, setPortDirection] = useState<"input" | "output">("input");
@@ -459,13 +462,14 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [canvasId, openCanvasIds, selectedEdgeId, selectedNodeId, snapshot.canvases]);
 
-  const createWorkspace = async () => {
-    const name = newWorkspaceName.trim();
-    if (!name) return;
+  const chooseWorkspaceFolder = async () => {
     try {
-      const workspace = await client.createWorkspace({ name, path: `D:/Documents/${name}` });
+      const path = await open({ directory: true, multiple: false, title: "Choose Seekwd workspace folder" });
+      if (typeof path !== "string") return;
+      const name = path.split(/[\\/]/).filter(Boolean).pop() ?? "Workspace";
+      const workspace = await client.createWorkspace({ name, path });
       setWorkspaceId(workspace.id);
-      setNewWorkspaceName("");
+      setNewWorkspacePath(path);
       setNewWorkspaceOpen(false);
       showNotice("Workspace created", `${workspace.name} is ready for a new canvas.`, "success");
     } catch (error) {
@@ -689,6 +693,14 @@ function App() {
             ) : null}
           </Toolbar>
         }
+        onClose={() => void nativeWindow.close()}
+        onMinimize={() => void nativeWindow.minimize()}
+        onZoom={() => void nativeWindow.toggleMaximize()}
+        onTitlebarPointerDown={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button, input, a, [role='button']")) return;
+          void nativeWindow.startDragging();
+        }}
         sidebar={
           <WorkspaceNavigation
             surface={surface}
@@ -796,11 +808,17 @@ function App() {
         footer={
           <>
             <Button onClick={() => setNewWorkspaceOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={() => void createWorkspace()} disabled={!newWorkspaceName.trim()}>Create Workspace</Button>
+            <Button variant="primary" leadingIcon={<FolderOpen />} onClick={() => void chooseWorkspaceFolder()}>Choose Folder</Button>
           </>
         }
       >
-        <TextField label="Workspace name" autoFocus value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="Research Workspace" />
+        <div className="workspace-picker">
+          <FolderOpen aria-hidden="true" />
+          <div>
+            <strong>{newWorkspacePath || "No folder selected"}</strong>
+            <span>Choose a local folder to use as the workspace boundary. Seekwd stores its own index separately and does not delete this folder during uninstall.</span>
+          </div>
+        </div>
       </Dialog>
 
       <Dialog
