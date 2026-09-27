@@ -1,65 +1,1601 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { Bell, ChevronDown, ChevronRight, CircleCheck, CirclePlay, Folder, FolderPlus, GitBranch, Pencil, Play, Plus, Save, Sparkles, Workflow } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpFromLine,
+  Bell,
+  Blocks,
+  Bot,
+  CalendarClock,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CirclePlay,
+  Clock3,
+  Code2,
+  Database,
+  ExternalLink,
+  FileCode2,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  History,
+  KeyRound,
+  LoaderCircle,
+  MoreHorizontal,
+  PanelBottom,
+  PanelRight,
+  PanelsTopLeft,
+  Paperclip,
+  Pause,
+  Pencil,
+  Play,
+  Plus,
+  Search,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+  Type,
+  UserRoundCog,
+  X,
+  Zap,
+} from "lucide-react";
 import { createHttpHostClient, createLocalHostClient } from "@seekwd/client";
-import type { Canvas, HostSnapshot, Workspace } from "@seekwd/protocol-schema";
+import type { Canvas, CanvasEdge, CanvasNode as WireNode, HostSnapshot, Run, Workspace } from "@seekwd/protocol-schema";
+import {
+  Button,
+  AutoGrowTextArea,
+  CanvasNode,
+  Dialog,
+  IconButton,
+  InspectorSection,
+  Menu,
+  Notification,
+  PanelHeader,
+  PropertyRow,
+  SidebarItem,
+  StatusBadge,
+  Switch,
+  TextField,
+  Toolbar,
+  Tooltip,
+  WindowFrame,
+} from "@seekwd/ui";
 import "@seekwd/ui/styles.css";
 import "./workbench.css";
 
-const client = import.meta.env.VITE_HOST_PROXY === "1"
-  ? createHttpHostClient("")
-  : createLocalHostClient();
+const client = import.meta.env.VITE_HOST_PROXY === "0" ? createLocalHostClient() : createHttpHostClient("");
 
-function App() {
-  const [snapshot, setSnapshot] = useState<HostSnapshot>({ snapshotVersion: 0, workspaces: [], canvases: [], nodes: [], edges: [], revisions: [], runs: [], notifications: [] });
-  const [workspaceId, setWorkspaceId] = useState<string>();
-  const [canvasId, setCanvasId] = useState<string>();
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [notice, setNotice] = useState<string>();
-  const activeWorkspace = snapshot.workspaces.find((item) => item.id === workspaceId) ?? snapshot.workspaces[0];
-  const activeCanvas = snapshot.canvases.find((item) => item.id === canvasId) ?? snapshot.canvases.find((item) => item.workspaceId === activeWorkspace?.id);
-  const currentRun = activeCanvas ? snapshot.runs.find((run) => run.canvasId === activeCanvas.id && run.status === "running") : undefined;
-  const latestRevision = activeCanvas ? snapshot.revisions.filter((revision) => revision.canvasId === activeCanvas.id).sort((a, b) => b.revision - a.revision)[0] : undefined;
-  const activeEntrypointNode = activeCanvas?.defaultEntrypointNodeId
-    ? snapshot.nodes.find((node) => node.id === activeCanvas.defaultEntrypointNodeId)
-    : undefined;
+type Surface = "canvas" | "automations" | "extensions" | "settings" | "files" | "environments" | "agents";
+type RuntimeState = "idle" | "running" | "waiting" | "success" | "error";
+type PortKind = "data" | "flow" | "event" | "resource";
+type RenameTarget = { kind: "workspace" | "canvas" | "node"; id: string; name: string };
+type DeleteTarget = { kind: "workspace" | "canvas" | "node" | "edge"; id: string; name: string; description: string };
 
-  useEffect(() => { void client.snapshot().then(setSnapshot).catch((error) => setNotice(error instanceof Error ? error.message : "Host connection failed")); return client.subscribe(setSnapshot); }, []);
-  useEffect(() => { if (activeWorkspace && !workspaceId) setWorkspaceId(activeWorkspace.id); if (activeCanvas && !canvasId) setCanvasId(activeCanvas.id); }, [activeWorkspace, activeCanvas, workspaceId, canvasId]);
-  useEffect(() => { const item = snapshot.notifications[0]; if (!item) return; setNotice(item.message); const timer = window.setTimeout(() => setNotice(undefined), 5000); return () => window.clearTimeout(timer); }, [snapshot.notifications]);
-
-  const canvasesForWorkspace = useMemo(() => activeWorkspace ? snapshot.canvases.filter((item) => item.workspaceId === activeWorkspace.id) : [], [snapshot.canvases, activeWorkspace]);
-  const run = async () => { if (!activeCanvas || currentRun) return; try { await client.startRun({ canvasId: activeCanvas.id, revision: activeCanvas.revision, entrypoint: "default", idempotencyKey: crypto.randomUUID() }); } catch (error) { setNotice(error instanceof Error ? `${error.name}: ${error.message}` : "Unable to start run"); } };
-  const createWorkspace = async () => { try { const item = await client.createWorkspace({ name: "New Workspace", path: "D:/Documents/New Workspace" }); setWorkspaceId(item.id); setExpanded((state) => ({ ...state, [item.id]: true })); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to create workspace"); } };
-  const createCanvas = async () => { if (!activeWorkspace) return; try { const item = await client.createCanvas({ workspaceId: activeWorkspace.id, name: "Untitled Canvas" }); setCanvasId(item.id); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to create canvas"); } };
-  const renameCanvas = async () => { if (!activeCanvas) return; const name = window.prompt("Canvas name", activeCanvas.name); if (!name) return; try { await client.renameCanvas(activeCanvas.id, name); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to rename canvas"); } };
-  const saveRevision = async () => { if (!activeCanvas) return; try { const revision = await client.saveRevision(activeCanvas.id, activeCanvas.draftRevision); setNotice(`Revision ${revision.revision} saved`); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to save revision"); } };
-  const configureEntrypoint = async () => { if (!activeCanvas || !activeEntrypointNode) return; try { await client.setDefaultEntrypoint(activeCanvas.id, activeEntrypointNode.id); setNotice("Default entrypoint configured"); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to configure entrypoint"); } };
-  const canvasNodes = activeCanvas ? snapshot.nodes.filter((node) => node.canvasId === activeCanvas.id) : [];
-  const canvasEdges = activeCanvas ? snapshot.edges.filter((edge) => edge.canvasId === activeCanvas.id) : [];
-  const addTaskNode = async () => { if (!activeCanvas) return; try { await client.createNode({ canvasId: activeCanvas.id, name: `Task ${canvasNodes.length}`, kind: "task.manual" }); setNotice("Task node added"); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to add node"); } };
-  const connectLastNodes = async () => { if (!activeCanvas || canvasNodes.length < 2) return; const source = canvasNodes[canvasNodes.length - 2]; const target = canvasNodes[canvasNodes.length - 1]; try { await client.createEdge({ canvasId: activeCanvas.id, sourceNodeId: source.id, targetNodeId: target.id }); setNotice(`${source.name} connected to ${target.name}`); } catch (error) { setNotice(error instanceof Error ? error.message : "Unable to connect nodes"); } };
-
-  return <main className="workbench" data-sk-theme="light">
-    <aside className="navigation">
-      <header className="nav-header"><div className="brand-mark"><Sparkles size={16} /></div><div><strong>Seekwd</strong><span>Workbench</span></div><button aria-label="Notifications"><Bell size={16} /></button></header>
-      <div className="nav-actions"><button onClick={createWorkspace}><FolderPlus size={15} />New workspace</button><button onClick={createCanvas} disabled={!activeWorkspace}><Plus size={15} />New canvas</button></div>
-      <section className="tree-section"><div className="tree-title"><span>WORKSPACES</span><button onClick={() => setExpanded({})}>Collapse all</button></div>
-        {snapshot.workspaces.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} open={expanded[workspace.id] ?? true} selected={workspace.id === activeWorkspace?.id} onToggle={() => setExpanded((state) => ({ ...state, [workspace.id]: !state[workspace.id] }))} onSelect={() => { setWorkspaceId(workspace.id); setCanvasId(undefined); }} canvases={snapshot.canvases.filter((canvas) => canvas.workspaceId === workspace.id)} canvasId={canvasId} onCanvasSelect={setCanvasId} />)}
-      </section>
-      <footer className="nav-footer"><div><span className="status-dot" />Local host connected</div><span className="version">v0.1 vertical slice</span></footer>
-    </aside>
-    <section className="surface">
-      <header className="surface-header"><div><span className="eyebrow">{activeWorkspace?.name ?? "Workspace"}</span><h1>{activeCanvas?.name ?? "Select a canvas"}</h1><p>{activeCanvas ? `Revision ${activeCanvas.revision} · ${activeCanvas.status}` : "Create a canvas to begin"}</p></div><div className="header-actions"><button className="quiet-button" onClick={renameCanvas} disabled={!activeCanvas}><Pencil size={15} />Rename</button><button className="quiet-button" onClick={saveRevision} disabled={!activeCanvas}><Save size={15} />Save revision</button>{activeCanvas && !activeCanvas.defaultEntrypointNodeId && activeEntrypointNode ? <button className="quiet-button" onClick={configureEntrypoint}><CirclePlay size={15} />Set start</button> : null}<button className="run-button" onClick={run} disabled={!activeCanvas || !activeCanvas.defaultEntrypointNodeId || Boolean(currentRun)}><Play size={15} />{currentRun ? "Running" : "Run"}</button></div></header>
-      <div className="canvas-area">{activeCanvas ? <><div className="canvas-toolbar"><span><GitBranch size={15} />Graph editor</span><span className="revision-pill">{latestRevision ? `Latest revision ${latestRevision.revision}` : "No revision saved"} · {canvasNodes.length} nodes · {canvasEdges.length} edges</span><div className="graph-actions"><button className="quiet-button" onClick={addTaskNode}><Plus size={14} />Add task</button><button className="quiet-button" onClick={connectLastNodes} disabled={canvasNodes.length < 2}><Workflow size={14} />Connect last</button></div></div><div className="graph"><svg className="graph-edges" aria-hidden="true"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#8faac5" /></marker></defs>{canvasEdges.map((edge) => { const sourceIndex = canvasNodes.findIndex((node) => node.id === edge.sourceNodeId); const targetIndex = canvasNodes.findIndex((node) => node.id === edge.targetNodeId); if (sourceIndex < 0 || targetIndex < 0) return null; const point = (index: number) => ({ x: 18 + (index % 3) * 29, y: 22 + Math.floor(index / 3) * 22 + 7 }); const source = point(sourceIndex); const target = point(targetIndex); return <line key={edge.id} x1={`${source.x + 18}%`} y1={`${source.y}%`} x2={`${target.x}%`} y2={`${target.y}%`} markerEnd="url(#arrow)" />; })}</svg>{canvasNodes.map((node, index) => <div key={node.id} className={`node ${node.id === activeCanvas.defaultEntrypointNodeId ? "start-node" : "task-node"}`} style={{ left: `${18 + (index % 3) * 29}%`, top: `${22 + Math.floor(index / 3) * 22}%` }}><span className="node-icon">{node.id === activeCanvas.defaultEntrypointNodeId ? <CirclePlay size={16} /> : <CircleCheck size={16} />}</span><div><strong>{node.name}</strong><small>{node.id === activeCanvas.defaultEntrypointNodeId ? "Default entrypoint" : node.kind}</small></div><span className="port output" /><span className="port input" /></div>)}{canvasNodes.length === 0 ? <div className="empty-hint">Add a task node to start building this canvas.</div> : null}</div></> : <div className="empty-state"><Folder size={24} /><strong>No canvas selected</strong><span>Create a canvas from the left navigation.</span></div>}</div>
-    </section>
-    <aside className="inspector"><div className="inspector-head"><span>RUN INSPECTOR</span><span className={`state-chip ${activeCanvas?.status ?? "idle"}`}>{activeCanvas?.status ?? "idle"}</span></div><section><h2>Canvas</h2><dl><div><dt>Entrypoint</dt><dd>{activeCanvas?.defaultEntrypointNodeId ? "Default · Start" : "Not configured"}</dd></div><div><dt>Revision</dt><dd>{activeCanvas?.revision ?? "-"}</dd></div><div><dt>Latest run</dt><dd>{activeCanvas ? (snapshot.runs.find((run) => run.canvasId === activeCanvas.id)?.status ?? "None") : "-"}</dd></div></dl></section><section><h2>Next step</h2><p className="inspector-copy">This slice proves the Host boundary. The next runtime increment adds a real LocalRestricted worker behind the same Run command.</p></section></aside>
-    {notice ? <div className="toast"><Bell size={15} /><span>{notice}</span><button onClick={() => setNotice(undefined)} aria-label="Dismiss">×</button></div> : null}
-  </main>;
+interface Notice {
+  id: string;
+  title: string;
+  message: string;
+  severity: "info" | "success" | "warning" | "error";
 }
 
-function WorkspaceRow({ workspace, open, selected, onToggle, onSelect, canvases, canvasId, onCanvasSelect }: { workspace: Workspace; open: boolean; selected: boolean; onToggle: () => void; onSelect: () => void; canvases: Canvas[]; canvasId?: string; onCanvasSelect: (id: string) => void }) {
-  return <div className={`workspace-row ${selected ? "selected" : ""}`}><div className="workspace-label"><button className="disclosure" aria-label={open ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`} onClick={onToggle}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button><button className="workspace-select" onClick={onSelect}><Folder size={15} /><span>{workspace.name}</span></button></div>{open ? <div className="canvas-list">{canvases.map((canvas) => <button key={canvas.id} className={`canvas-row ${canvas.id === canvasId ? "selected" : ""}`} onClick={() => onCanvasSelect(canvas.id)}><CirclePlay size={13} /><span>{canvas.name}</span><span className={`mini-status ${canvas.status}`} /></button>)}</div> : null}</div>;
+interface SettingsState {
+  compactSidebar: boolean;
+  reduceMotion: boolean;
+  notifySuccess: boolean;
+  notifyFailure: boolean;
+  allowBackgroundRuns: boolean;
+  confirmDestructive: boolean;
+}
+
+interface GraphValidation {
+  valid: boolean;
+  message: string;
+}
+
+const emptySnapshot: HostSnapshot = {
+  snapshotVersion: 0,
+  workspaces: [],
+  canvases: [],
+  nodes: [],
+  edges: [],
+  revisions: [],
+  runs: [],
+  notifications: [],
+};
+
+function App() {
+  const [snapshot, setSnapshot] = useState<HostSnapshot>(emptySnapshot);
+  const [workspaceId, setWorkspaceId] = useState<string>();
+  const [canvasId, setCanvasId] = useState<string>();
+  const [openCanvasIds, setOpenCanvasIds] = useState<string[]>([]);
+  const [surface, setSurface] = useState<Surface>("canvas");
+  const [workspacesOpen, setWorkspacesOpen] = useState(true);
+  const [recentOpen, setRecentOpen] = useState(true);
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({});
+  const [expandedCanvases, setExpandedCanvases] = useState<Record<string, boolean>>({});
+  const [nodeLibraryOpen, setNodeLibraryOpen] = useState(false);
+  const [runHistoryOpen, setRunHistoryOpen] = useState(false);
+  const [runPanelOpen, setRunPanelOpen] = useState(false);
+  const [runInputValue, setRunInputValue] = useState("");
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>();
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string>();
+  const [connectionSource, setConnectionSource] = useState<{ nodeId: string; portId: string; kind: PortKind } | null>(null);
+  const [nodeConfigDrafts, setNodeConfigDrafts] = useState<Record<string, Record<string, unknown>>>({});
+  const pendingNodeConfigs = useRef(new Map<string, Record<string, unknown>>());
+  const nodeConfigTimers = useRef(new Map<string, number>());
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [notificationsHydrated, setNotificationsHydrated] = useState(false);
+  const knownNotificationIds = useRef<Set<string>>(new Set());
+  const [renameTarget, setRenameTarget] = useState<RenameTarget>();
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>();
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
+  const [portName, setPortName] = useState("");
+  const [portDirection, setPortDirection] = useState<"input" | "output">("input");
+  const [portKind, setPortKind] = useState<PortKind>("data");
+  const [settings, setSettings] = useState<SettingsState>({
+    compactSidebar: false,
+    reduceMotion: false,
+    notifySuccess: true,
+    notifyFailure: true,
+    allowBackgroundRuns: false,
+    confirmDestructive: true,
+  });
+
+  const activeWorkspace = snapshot.workspaces.find((item) => item.id === workspaceId) ?? snapshot.workspaces[0];
+  const activeCanvas = snapshot.canvases.find((item) => item.id === canvasId)
+    ?? snapshot.canvases.find((item) => item.workspaceId === activeWorkspace?.id);
+  const canvasNodes = useMemo(
+    () => (activeCanvas
+      ? snapshot.nodes
+        .filter((node) => node.canvasId === activeCanvas.id)
+        .map((node) => nodeConfigDrafts[node.id]
+          ? { ...node, config: { ...(node.config ?? {}), ...nodeConfigDrafts[node.id] } }
+          : node)
+        .sort((left, right) => Number(right.id === activeCanvas.defaultEntrypointNodeId) - Number(left.id === activeCanvas.defaultEntrypointNodeId))
+      : []),
+    [activeCanvas, nodeConfigDrafts, snapshot.nodes],
+  );
+  const canvasEdges = useMemo(
+    () => (activeCanvas ? snapshot.edges.filter((edge) => edge.canvasId === activeCanvas.id) : []),
+    [activeCanvas, snapshot.edges],
+  );
+  const selectedNode = canvasNodes.find((node) => node.id === selectedNodeId);
+  const selectedEdge = canvasEdges.find((edge) => edge.id === selectedEdgeId);
+  const activeRun = activeCanvas
+    ? snapshot.runs.find((run) => run.canvasId === activeCanvas.id && (run.status === "running" || run.status === "queued" || run.status === "waiting_input"))
+    : undefined;
+  const latestRun = activeCanvas
+    ? snapshot.runs
+      .filter((run) => run.canvasId === activeCanvas.id)
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0]
+    : undefined;
+  const canvasRuns = useMemo(
+    () => (activeCanvas ? snapshot.runs.filter((run) => run.canvasId === activeCanvas.id) : []),
+    [activeCanvas, snapshot.runs],
+  );
+  const graphValidation = useMemo(
+    () => validateCanvasGraphForUi(activeCanvas, canvasNodes, canvasEdges),
+    [activeCanvas, canvasNodes, canvasEdges],
+  );
+  const otherActiveRuns = useMemo(
+    () => snapshot.runs
+      .filter((run) => run.status === "running" || run.status === "queued" || run.status === "waiting_input")
+      .filter((run) => run.canvasId !== activeCanvas?.id)
+      .map((run) => {
+        const canvas = snapshot.canvases.find((item) => item.id === run.canvasId);
+        const node = snapshot.nodes.find((item) => item.id === run.currentNodeId);
+        return `${canvas?.name ?? "Unknown canvas"} · ${node?.name ?? run.status}`;
+      }),
+    [activeCanvas?.id, snapshot.canvases, snapshot.nodes, snapshot.runs],
+  );
+
+  const showNotice = (title: string, message: string, severity: Notice["severity"] = "info") => {
+    setNotices((current) => [...current, { id: `${Date.now()}-${Math.random()}`, title, message, severity }]);
+  };
+
+  const reportError = (error: unknown, fallback: string) => {
+    showNotice("Action failed", error instanceof Error ? error.message : fallback, "error");
+  };
+
+  const flushNodeConfig = async (nodeId: string) => {
+    const config = pendingNodeConfigs.current.get(nodeId);
+    if (!config) return;
+    const timer = nodeConfigTimers.current.get(nodeId);
+    if (timer !== undefined) window.clearTimeout(timer);
+    nodeConfigTimers.current.delete(nodeId);
+    await client.updateNode({ nodeId, config });
+    if (pendingNodeConfigs.current.get(nodeId) === config) {
+      pendingNodeConfigs.current.delete(nodeId);
+    }
+  };
+
+  const flushAllNodeConfigs = async () => {
+    await Promise.all([...pendingNodeConfigs.current.keys()].map((nodeId) => flushNodeConfig(nodeId)));
+  };
+
+  const updateNodeConfig = (nodeId: string, config: Record<string, unknown>) => {
+    const merged = { ...(pendingNodeConfigs.current.get(nodeId) ?? {}), ...config };
+    pendingNodeConfigs.current.set(nodeId, merged);
+    setNodeConfigDrafts((current) => ({ ...current, [nodeId]: { ...(current[nodeId] ?? {}), ...config } }));
+    const timer = nodeConfigTimers.current.get(nodeId);
+    if (timer !== undefined) window.clearTimeout(timer);
+    nodeConfigTimers.current.set(nodeId, window.setTimeout(() => {
+      void flushNodeConfig(nodeId).catch((error) => reportError(error, "Unable to save node input"));
+    }, 350));
+  };
+
+  const requestDeleteNode = (nodeId: string) => {
+    const node = snapshot.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) return;
+    setDeleteTarget({ kind: "node", id: nodeId, name: node.name, description: "This also removes every connection attached to the node." });
+  };
+
+  const deleteNodeById = async (nodeId: string) => {
+    const node = snapshot.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) return;
+    try {
+      await flushNodeConfig(nodeId);
+      await client.deleteNode(nodeId);
+      setSelectedNodeId(undefined);
+      setSelectedEdgeId(undefined);
+      showNotice("Node deleted", `${node.name} and its connections were removed.`, "success");
+    } catch (error) {
+      reportError(error, "Unable to delete node");
+    }
+  };
+
+  const requestDeleteEdge = (edgeId: string) => {
+    const edge = snapshot.edges.find((candidate) => candidate.id === edgeId);
+    if (!edge) return;
+    setDeleteTarget({ kind: "edge", id: edgeId, name: "Connection", description: "The selected connection will be removed from this canvas." });
+  };
+
+  const deleteEdgeById = async (edgeId: string) => {
+    try {
+      await client.deleteEdge(edgeId);
+      setSelectedEdgeId(undefined);
+      showNotice("Connection deleted", "The selected connection was removed.", "success");
+    } catch (error) {
+      reportError(error, "Unable to delete connection");
+    }
+  };
+
+  const requestDeleteCanvas = (canvas: Canvas) => {
+    setDeleteTarget({ kind: "canvas", id: canvas.id, name: canvas.name, description: "This removes the canvas, its nodes, connections, revisions and run history." });
+  };
+
+  const deleteCanvasById = async (canvasIdToDelete: string) => {
+    try {
+      await client.deleteCanvas(canvasIdToDelete);
+      setOpenCanvasIds((current) => current.filter((id) => id !== canvasIdToDelete));
+      if (canvasId === canvasIdToDelete) {
+        const fallback = snapshot.canvases.find((item) => item.id !== canvasIdToDelete);
+        setCanvasId(fallback?.id);
+        setWorkspaceId(fallback?.workspaceId ?? workspaceId);
+      }
+      setSelectedNodeId(undefined);
+      setSelectedEdgeId(undefined);
+      showNotice("Canvas deleted", "The canvas and its local data were removed.", "success");
+    } catch (error) {
+      reportError(error, "Unable to delete canvas");
+    }
+  };
+
+  const requestDeleteWorkspace = (workspace: Workspace) => {
+    setDeleteTarget({ kind: "workspace", id: workspace.id, name: workspace.name, description: "This removes the workspace and all canvases, nodes, connections and runs inside it." });
+  };
+
+  const deleteWorkspaceById = async (workspaceIdToDelete: string) => {
+    try {
+      await client.deleteWorkspace(workspaceIdToDelete);
+      const remainingWorkspace = snapshot.workspaces.find((item) => item.id !== workspaceIdToDelete);
+      const remainingCanvases = snapshot.canvases.filter((item) => item.workspaceId !== workspaceIdToDelete);
+      setWorkspaceId(remainingWorkspace?.id);
+      setCanvasId(remainingCanvases[0]?.id);
+      setOpenCanvasIds((current) => current.filter((id) => remainingCanvases.some((canvas) => canvas.id === id)));
+      setSelectedNodeId(undefined);
+      setSelectedEdgeId(undefined);
+      showNotice("Workspace deleted", "The workspace and its local data were removed.", "success");
+    } catch (error) {
+      reportError(error, "Unable to delete workspace");
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleteTarget(undefined);
+    if (target.kind === "node") await deleteNodeById(target.id);
+    if (target.kind === "edge") await deleteEdgeById(target.id);
+    if (target.kind === "canvas") await deleteCanvasById(target.id);
+    if (target.kind === "workspace") await deleteWorkspaceById(target.id);
+  };
+
+  useEffect(() => {
+    let active = true;
+    void client.snapshot().then((next) => {
+      if (active) {
+        setSnapshot(next);
+        knownNotificationIds.current = new Set(next.notifications.map((notification) => notification.id));
+        setNotificationsHydrated(true);
+      }
+    }).catch((error) => reportError(error, "Host connection failed"));
+    const unsubscribe = client.subscribe((next) => {
+      if (active) setSnapshot(next);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeWorkspace) return;
+    if (!workspaceId) setWorkspaceId(activeWorkspace.id);
+    setExpandedWorkspaces((items) => ({ ...items, [activeWorkspace.id]: items[activeWorkspace.id] ?? true }));
+  }, [activeWorkspace, workspaceId]);
+
+  useEffect(() => {
+    if (!activeCanvas) return;
+    if (!canvasId) setCanvasId(activeCanvas.id);
+    setOpenCanvasIds((current) => current.includes(activeCanvas.id) ? current : [...current, activeCanvas.id]);
+    setExpandedCanvases((items) => ({ ...items, [activeCanvas.id]: items[activeCanvas.id] ?? true }));
+    if (!selectedNodeId || !canvasNodes.some((node) => node.id === selectedNodeId)) {
+      setSelectedNodeId(activeCanvas.defaultEntrypointNodeId ?? canvasNodes[0]?.id);
+    }
+    if (selectedEdgeId && !canvasEdges.some((edge) => edge.id === selectedEdgeId)) {
+      setSelectedEdgeId(undefined);
+    }
+  }, [activeCanvas, canvasEdges, canvasId, canvasNodes, selectedEdgeId, selectedNodeId]);
+
+  useEffect(() => {
+    if (!notificationsHydrated) return;
+    const fresh = snapshot.notifications
+      .filter((notification) => !knownNotificationIds.current.has(notification.id))
+      .reverse();
+    if (!fresh.length) return;
+    fresh.forEach((notification) => knownNotificationIds.current.add(notification.id));
+    setNotices((current) => [...current, ...fresh.flatMap((notification) => {
+      if (notification.severity === "success" && !settings.notifySuccess) return [];
+      if (notification.severity === "error" && !settings.notifyFailure) return [];
+      return [{
+        id: notification.id,
+        title: notification.title,
+        message: notification.message,
+        severity: notification.severity,
+      }];
+    })]);
+  }, [notificationsHydrated, settings.notifyFailure, settings.notifySuccess, snapshot.notifications]);
+
+  useEffect(() => {
+    setNodeConfigDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [nodeId, draft] of Object.entries(current)) {
+        const node = snapshot.nodes.find((candidate) => candidate.id === nodeId);
+        if (!node || Object.entries(draft).every(([key, value]) => Object.is(node.config?.[key], value))) {
+          if (!node) {
+            delete next[nodeId];
+            changed = true;
+          } else if (Object.entries(draft).every(([key, value]) => Object.is(node.config?.[key], value))) {
+            delete next[nodeId];
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [snapshot.nodes]);
+
+  const selectWorkspace = (workspace: Workspace) => {
+    setWorkspaceId(workspace.id);
+    const firstCanvas = snapshot.canvases.find((canvas) => canvas.workspaceId === workspace.id);
+    if (firstCanvas) {
+      setCanvasId(firstCanvas.id);
+      setOpenCanvasIds((current) => current.includes(firstCanvas.id) ? current : [...current, firstCanvas.id]);
+    }
+    setSurface("canvas");
+  };
+
+  const selectCanvas = (canvas: Canvas) => {
+    setWorkspaceId(canvas.workspaceId);
+    setCanvasId(canvas.id);
+    setOpenCanvasIds((current) => current.includes(canvas.id) ? current : [...current, canvas.id]);
+    setExpandedWorkspaces((current) => ({ ...current, [canvas.workspaceId]: true }));
+    setExpandedCanvases((current) => ({ ...current, [canvas.id]: true }));
+    setSurface("canvas");
+  };
+
+  const closeCanvasTab = (id: string) => {
+    setOpenCanvasIds((current) => {
+      const next = current.filter((canvasId) => canvasId !== id);
+      if (canvasId === id) {
+        const fallback = next[next.length - 1];
+        setCanvasId(fallback);
+        const fallbackCanvas = snapshot.canvases.find((canvas) => canvas.id === fallback);
+        if (fallbackCanvas) setWorkspaceId(fallbackCanvas.workspaceId);
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      const modifier = event.metaKey || event.ctrlKey;
+      if (modifier && event.key.toLowerCase() === "w" && canvasId) {
+        event.preventDefault();
+        closeCanvasTab(canvasId);
+      } else if ((event.key === "Delete" || event.key === "Backspace") && selectedEdgeId) {
+        event.preventDefault();
+        requestDeleteEdge(selectedEdgeId);
+      } else if ((event.key === "Delete" || event.key === "Backspace") && selectedNodeId) {
+        event.preventDefault();
+        requestDeleteNode(selectedNodeId);
+      } else if (modifier && event.key === "Tab" && openCanvasIds.length > 1) {
+        event.preventDefault();
+        const index = Math.max(0, openCanvasIds.indexOf(canvasId ?? ""));
+        const nextId = openCanvasIds[(index + (event.shiftKey ? -1 : 1) + openCanvasIds.length) % openCanvasIds.length];
+        const nextCanvas = snapshot.canvases.find((canvas) => canvas.id === nextId);
+        if (nextCanvas) selectCanvas(nextCanvas);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canvasId, openCanvasIds, selectedEdgeId, selectedNodeId, snapshot.canvases]);
+
+  const createWorkspace = async () => {
+    const name = newWorkspaceName.trim();
+    if (!name) return;
+    try {
+      const workspace = await client.createWorkspace({ name, path: `D:/Documents/${name}` });
+      setWorkspaceId(workspace.id);
+      setNewWorkspaceName("");
+      setNewWorkspaceOpen(false);
+      showNotice("Workspace created", `${workspace.name} is ready for a new canvas.`, "success");
+    } catch (error) {
+      reportError(error, "Unable to create workspace");
+    }
+  };
+
+  const createCanvas = async () => {
+    if (!activeWorkspace) return;
+    try {
+      const canvas = await client.createCanvas({ workspaceId: activeWorkspace.id, name: "Untitled Canvas" });
+      setCanvasId(canvas.id);
+      setOpenCanvasIds((current) => current.includes(canvas.id) ? current : [...current, canvas.id]);
+      setExpandedWorkspaces((current) => ({ ...current, [activeWorkspace.id]: true }));
+      setExpandedCanvases((current) => ({ ...current, [canvas.id]: true }));
+      setSurface("canvas");
+      showNotice("Canvas created", `${canvas.name} was added to ${activeWorkspace.name}.`, "success");
+    } catch (error) {
+      reportError(error, "Unable to create canvas");
+    }
+  };
+
+  const startRename = (target: RenameTarget) => {
+    setRenameTarget(target);
+    setRenameValue(target.name);
+  };
+
+  const confirmRename = async () => {
+    if (!renameTarget || !renameValue.trim()) return;
+    try {
+      if (renameTarget.kind === "workspace") await client.renameWorkspace(renameTarget.id, renameValue.trim());
+      if (renameTarget.kind === "canvas") await client.renameCanvas(renameTarget.id, renameValue.trim());
+      setRenameTarget(undefined);
+      showNotice("Renamed", `${renameValue.trim()} is now saved.`, "success");
+    } catch (error) {
+      reportError(error, "Unable to rename item");
+    }
+  };
+
+  const saveRevision = async () => {
+    if (!activeCanvas) return;
+    try {
+      const revision = await client.saveRevision(activeCanvas.id, activeCanvas.draftRevision);
+      showNotice("Revision saved", `Revision ${revision.revision} is ready to run.`, "success");
+    } catch (error) {
+      reportError(error, "Unable to save revision");
+    }
+  };
+
+  const runCanvas = async () => {
+    if (!activeCanvas) return;
+    try {
+      await flushAllNodeConfigs();
+    } catch (error) {
+      reportError(error, "Unable to save node inputs");
+      return;
+    }
+    if (!activeCanvas.defaultEntrypointNodeId) {
+      showNotice("Canvas is not directly runnable", "This canvas has no manual entrypoint. Select a node and choose Set as canvas entry node before running.", "warning");
+      return;
+    }
+    if (!graphValidation.valid) {
+      showNotice("Canvas is not ready", graphValidation.message, "warning");
+      return;
+    }
+    try {
+      let revision = activeCanvas.revision;
+      if (activeCanvas.draftDirty) {
+        const saved = await client.saveRevision(activeCanvas.id, activeCanvas.draftRevision);
+        revision = saved.revision;
+      }
+      await client.startRun({
+        canvasId: activeCanvas.id,
+        revision,
+        entrypoint: "default",
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setRunPanelOpen(true);
+      setRunInputValue("");
+      showNotice(activeCanvas.draftDirty ? "Graph saved and run started" : "Run started", `${activeCanvas.name} is running on the local Host.`, "info");
+    } catch (error) {
+      reportError(error, "Unable to start run");
+    }
+  };
+
+  const submitRunInput = async () => {
+    if (!activeRun || !runInputValue.trim()) return;
+    try {
+      await client.submitRunInput({ runId: activeRun.id, value: runInputValue.trim() });
+      setRunInputValue("");
+    } catch (error) {
+      reportError(error, "Unable to submit node result");
+    }
+  };
+
+  const addNode = async (name: string, position?: { x: number; y: number }) => {
+    if (!activeCanvas) return;
+    const kind = nodeKindForName(name);
+    try {
+      const node = await client.createNode({
+        canvasId: activeCanvas.id,
+        name,
+        kind,
+      });
+      if (position) await client.updateNode({ nodeId: node.id, config: { position } });
+      setSelectedNodeId(node.id);
+      setNodeLibraryOpen(false);
+      showNotice("Node added", `${name} was added to the canvas.`, "success");
+    } catch (error) {
+      reportError(error, "Unable to add node");
+    }
+  };
+
+  const createPort = async () => {
+    if (!portDialogNodeId || !portName.trim()) return;
+    try {
+      await client.createPort({
+        nodeId: portDialogNodeId,
+        name: portName.trim(),
+        direction: portDirection,
+        kind: portKind,
+      });
+      setPortDialogNodeId(undefined);
+      setPortName("");
+      showNotice("Port added", "The new port is saved to the local Host.", "success");
+    } catch (error) {
+      reportError(error, "Unable to add port");
+    }
+  };
+
+  const setEntrypoint = async (nodeId: string) => {
+    if (!activeCanvas) return;
+    try {
+      await client.setDefaultEntrypoint(activeCanvas.id, nodeId);
+      showNotice("Canvas entry updated", "This node is now the default manual entrypoint.", "success");
+    } catch (error) {
+      reportError(error, "Unable to configure entrypoint");
+    }
+  };
+
+  const updateNode = async (nodeId: string, input: Omit<Parameters<typeof client.updateNode>[0], "nodeId">) => {
+    if (input.config) {
+      updateNodeConfig(nodeId, input.config);
+      return;
+    }
+    try {
+      await client.updateNode({ ...input, nodeId });
+    } catch (error) {
+      reportError(error, "Unable to update node");
+    }
+  };
+
+  const connectPort = async (
+    nodeId: string,
+    portId: string,
+    direction: "input" | "output",
+    kind: PortKind,
+    dragSource?: { nodeId: string; portId: string; kind: PortKind; pointerId: number },
+  ) => {
+    if (direction === "output") {
+      const isSamePort = connectionSource?.nodeId === nodeId && connectionSource.portId === portId;
+      setConnectionSource(isSamePort ? null : { nodeId, portId, kind });
+      showNotice(
+        isSamePort ? "Connection cancelled" : "Output selected",
+        isSamePort ? "The pending connection was cancelled." : "Now click a compatible input port on another node.",
+        "info",
+      );
+      return;
+    }
+    if (!activeCanvas) {
+      showNotice("No canvas selected", "Select a canvas before connecting ports.", "warning");
+      return;
+    }
+    const source = dragSource ?? connectionSource;
+    if (!source) {
+      showNotice("Select an output first", "Start by clicking an output port on the source node.", "warning");
+      return;
+    }
+    if (source.nodeId === nodeId) {
+      showNotice("Connection not allowed", "A node cannot connect to itself.", "error");
+      return;
+    }
+    if (source.kind !== kind) {
+      showNotice("Port types do not match", `This output is ${source.kind}; the selected input expects ${kind}.`, "error");
+      return;
+    }
+    try {
+      await client.createEdge({
+        canvasId: activeCanvas.id,
+        sourceNodeId: source.nodeId,
+        sourcePortId: source.portId,
+        targetNodeId: nodeId,
+        targetPortId: portId,
+        kind,
+      });
+      setConnectionSource(null);
+      showNotice("Connection created", "The node graph has been updated.", "success");
+    } catch (error) {
+      setConnectionSource(null);
+      reportError(error, "Unable to create connection");
+    }
+  };
+
+  const canvasState = toRuntimeState(activeCanvas?.status);
+  const recentCanvases = [...snapshot.canvases].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
+
+  return (
+    <div className={`workbench-root ${settings.reduceMotion ? "reduce-motion" : ""}`} data-sk-theme="light">
+      <WindowFrame
+        className={`lab-window ${inspectorOpen && surface === "canvas" ? "" : "hide-inspector"} ${settings.compactSidebar ? "compact-sidebar" : ""}`}
+        title={surface === "canvas" ? activeWorkspace?.name ?? "Seekwd Workbench" : surfaceTitle(surface)}
+        subtitle={surface === "canvas" ? activeCanvas?.name ?? "Select a canvas" : activeWorkspace?.name ?? "Local host"}
+        toolbar={
+          <Toolbar>
+            {surface === "canvas" ? (
+              <Tooltip content="Toggle inspector">
+                <IconButton label="Toggle inspector" active={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)}>
+                  <PanelRight />
+                </IconButton>
+              </Tooltip>
+            ) : null}
+          </Toolbar>
+        }
+        sidebar={
+          <WorkspaceNavigation
+            surface={surface}
+            activeWorkspace={activeWorkspace}
+            activeCanvas={activeCanvas}
+            snapshot={snapshot}
+            workspacesOpen={workspacesOpen}
+            recentOpen={recentOpen}
+            expandedWorkspaces={expandedWorkspaces}
+            expandedCanvases={expandedCanvases}
+            onToggleWorkspaces={() => setWorkspacesOpen((open) => !open)}
+            onToggleRecent={() => setRecentOpen((open) => !open)}
+            onToggleWorkspace={(id) => setExpandedWorkspaces((items) => ({ ...items, [id]: !items[id] }))}
+            onToggleCanvas={(id) => setExpandedCanvases((items) => ({ ...items, [id]: !items[id] }))}
+            onNavigate={setSurface}
+            onNewWorkspace={() => setNewWorkspaceOpen(true)}
+            onAddCanvas={createCanvas}
+            onSelectWorkspace={selectWorkspace}
+            onSelectCanvas={selectCanvas}
+            onRename={startRename}
+            onDeleteWorkspace={requestDeleteWorkspace}
+            onDeleteCanvas={requestDeleteCanvas}
+            onDeleteNode={requestDeleteNode}
+            onSetEntrypoint={setEntrypoint}
+            recentCanvases={recentCanvases}
+            runs={snapshot.runs}
+          />
+        }
+        inspector={surface === "canvas" && inspectorOpen ? selectedEdge
+          ? <ConnectionInspector edge={selectedEdge} nodes={canvasNodes} onDelete={() => requestDeleteEdge(selectedEdge.id)} />
+          : <NodeInspector node={selectedNode} canvas={activeCanvas} configDraft={nodeConfigDrafts[selectedNode?.id ?? ""]} onAddPort={() => selectedNode && setPortDialogNodeId(selectedNode.id)} onDeleteNode={selectedNode ? () => requestDeleteNode(selectedNode.id) : undefined} onFlushNodeConfig={(nodeId) => void flushNodeConfig(nodeId).catch((error) => reportError(error, "Unable to save node input"))} onUpdateNode={updateNode} />
+          : undefined}
+        bottomPanel={surface === "canvas" && runPanelOpen ? <RunPanel run={activeRun ?? latestRun} canvas={activeCanvas} nodes={canvasNodes} value={runInputValue} onValueChange={setRunInputValue} onSubmit={submitRunInput} /> : undefined}
+      >
+        {surface === "canvas" ? (
+          <CanvasSurface
+            workspaceName={activeWorkspace?.name ?? "Workspace"}
+            canvas={activeCanvas}
+            openCanvases={snapshot.canvases.filter((item) => openCanvasIds.includes(item.id))}
+            nodes={canvasNodes}
+            edges={canvasEdges}
+            selectedNodeId={selectedNode?.id}
+            selectedEdgeId={selectedEdgeId}
+            connectionSource={connectionSource}
+            nodeLibraryOpen={nodeLibraryOpen}
+            runHistoryOpen={runHistoryOpen}
+            runs={canvasRuns}
+            runPanelOpen={runPanelOpen}
+            runState={canvasState}
+            graphValidation={graphValidation}
+            otherActiveRuns={otherActiveRuns}
+            currentNodeId={activeRun?.currentNodeId ?? undefined}
+          onSelectNode={(id) => {
+            setSelectedNodeId(id);
+            setSelectedEdgeId(undefined);
+          }}
+            onSelectEdge={(id) => {
+              setSelectedEdgeId(id);
+              setSelectedNodeId(undefined);
+            }}
+            onDeleteEdge={requestDeleteEdge}
+            onPortConnect={(nodeId, portId, direction, kind, dragSource) => connectPort(nodeId, portId, direction, kind, dragSource)}
+            onNodeMoved={(nodeId, position) => void updateNode(nodeId, { config: { position } })}
+            onCancelConnection={() => {
+              setConnectionSource(null);
+              showNotice("Connection cancelled", "The pending connection was cancelled.", "info");
+            }}
+            onToggleNodeLibrary={() => setNodeLibraryOpen((open) => !open)}
+            onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
+            onAddNode={addNode}
+            onToggleRunHistory={() => setRunHistoryOpen((open) => !open)}
+            onCloseRunHistory={() => setRunHistoryOpen(false)}
+            onRun={runCanvas}
+            onToggleRunPanel={() => setRunPanelOpen((open) => !open)}
+            onAddCanvas={createCanvas}
+            onSaveRevision={saveRevision}
+            onSelectCanvas={selectCanvas}
+            onCloseCanvas={closeCanvasTab}
+          />
+        ) : (
+          <SurfacePage surface={surface} workspaceName={activeWorkspace?.name ?? "Workspace"} settings={settings} onSettingsChange={(key, value) => setSettings((current) => ({ ...current, [key]: value }))} onNotice={showNotice} />
+        )}
+      </WindowFrame>
+
+      {notices.length ? (
+        <div className="notification-stack">
+          {notices.map((item) => <Notification
+            key={item.id}
+            title={item.title}
+            icon={noticeIcon(item.severity)}
+            time="now"
+            duration={item.severity === "error" ? 0 : item.severity === "warning" ? 8000 : 5000}
+            onDismiss={() => setNotices((current) => current.filter((notice) => notice.id !== item.id))}
+          >
+            {item.message}
+          </Notification>)}
+        </div>
+      ) : null}
+
+      <Dialog
+        open={Boolean(newWorkspaceOpen)}
+        title="New Workspace"
+        description="Create a local workspace boundary for canvases, files and runs."
+        onClose={() => setNewWorkspaceOpen(false)}
+        footer={
+          <>
+            <Button onClick={() => setNewWorkspaceOpen(false)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void createWorkspace()} disabled={!newWorkspaceName.trim()}>Create Workspace</Button>
+          </>
+        }
+      >
+        <TextField label="Workspace name" autoFocus value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="Research Workspace" />
+      </Dialog>
+
+      <Dialog
+        open={Boolean(renameTarget)}
+        title={`Rename ${renameTarget?.kind ?? "item"}`}
+        onClose={() => setRenameTarget(undefined)}
+        footer={
+          <>
+            <Button onClick={() => setRenameTarget(undefined)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void confirmRename()} disabled={!renameValue.trim()}>Save</Button>
+          </>
+        }
+      >
+        <TextField label="Name" autoFocus value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
+      </Dialog>
+
+      <Dialog
+        open={Boolean(deleteTarget)}
+        title={`Delete ${deleteTarget?.kind ?? "item"}?`}
+        description={deleteTarget?.description}
+        onClose={() => setDeleteTarget(undefined)}
+        footer={
+          <>
+            <Button onClick={() => setDeleteTarget(undefined)}>Cancel</Button>
+            <Button variant="danger" leadingIcon={<Trash2 />} onClick={() => void confirmDelete()}>Delete</Button>
+          </>
+        }
+      >
+        <div className="delete-warning"><TriangleAlert /><span><strong>{deleteTarget?.name}</strong><small>This action cannot be undone.</small></span></div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(portDialogNodeId)}
+        title="Add port"
+        description="Ports are part of the node contract. Connections can only be made between compatible output and input ports."
+        onClose={() => setPortDialogNodeId(undefined)}
+        footer={
+          <>
+            <Button onClick={() => setPortDialogNodeId(undefined)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void createPort()} disabled={!portName.trim()}>Add port</Button>
+          </>
+        }
+      >
+        <div className="port-form">
+          <TextField label="Port name" autoFocus value={portName} onChange={(event) => setPortName(event.target.value)} placeholder="Input data" />
+          <label className="form-select"><span>Direction</span><select value={portDirection} onChange={(event) => setPortDirection(event.target.value as "input" | "output")}><option value="input">Input</option><option value="output">Output</option></select></label>
+          <label className="form-select"><span>Kind</span><select value={portKind} onChange={(event) => setPortKind(event.target.value as PortKind)}><option value="data">Data</option><option value="flow">Flow</option><option value="event">Event</option><option value="resource">Resource</option></select></label>
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+interface WorkspaceNavigationProps {
+  surface: Surface;
+  activeWorkspace?: Workspace;
+  activeCanvas?: Canvas;
+  snapshot: HostSnapshot;
+  workspacesOpen: boolean;
+  recentOpen: boolean;
+  expandedWorkspaces: Record<string, boolean>;
+  expandedCanvases: Record<string, boolean>;
+  onToggleWorkspaces: () => void;
+  onToggleRecent: () => void;
+  onToggleWorkspace: (id: string) => void;
+  onToggleCanvas: (id: string) => void;
+  onNavigate: (surface: Surface) => void;
+  onNewWorkspace: () => void;
+  onAddCanvas: () => void;
+  onSelectWorkspace: (workspace: Workspace) => void;
+  onSelectCanvas: (canvas: Canvas) => void;
+  onRename: (target: RenameTarget) => void;
+  onDeleteWorkspace: (workspace: Workspace) => void;
+  onDeleteCanvas: (canvas: Canvas) => void;
+  onDeleteNode: (nodeId: string) => void;
+  onSetEntrypoint: (nodeId: string) => void;
+  recentCanvases: Canvas[];
+  runs: Run[];
+}
+
+function WorkspaceNavigation(props: WorkspaceNavigationProps) {
+  const {
+    surface, activeWorkspace, activeCanvas, snapshot, workspacesOpen, recentOpen, expandedWorkspaces, expandedCanvases,
+    onToggleWorkspaces, onToggleRecent, onToggleWorkspace, onToggleCanvas, onNavigate, onNewWorkspace, onAddCanvas,
+    onSelectWorkspace, onSelectCanvas, onRename, onDeleteWorkspace, onDeleteCanvas, onDeleteNode, onSetEntrypoint, recentCanvases, runs,
+  } = props;
+  return (
+    <div className="sidebar-shell">
+      <nav className="sidebar-global" aria-label="Global actions">
+        <SidebarItem icon={<FolderPlus />} onClick={onNewWorkspace}>New Workspace</SidebarItem>
+        <SidebarItem icon={<CalendarClock />} active={surface === "automations"} onClick={() => onNavigate("automations")}>Automations</SidebarItem>
+        <SidebarItem icon={<Blocks />} active={surface === "extensions"} onClick={() => onNavigate("extensions")}>Extensions</SidebarItem>
+      </nav>
+      <div className="sidebar-scroll">
+        <SidebarDisclosure label="Workspaces" open={workspacesOpen} onToggle={onToggleWorkspaces}>
+          {snapshot.workspaces.map((workspace) => {
+            const canvases = snapshot.canvases.filter((canvas) => canvas.workspaceId === workspace.id);
+            return (
+              <WorkspaceRow
+                key={workspace.id}
+                workspace={workspace}
+                canvases={canvases}
+                current={workspace.id === activeWorkspace?.id}
+                open={expandedWorkspaces[workspace.id] ?? workspace.id === activeWorkspace?.id}
+                activeCanvasId={activeCanvas?.id}
+                expandedCanvases={expandedCanvases}
+                nodes={snapshot.nodes}
+                onToggle={() => onToggleWorkspace(workspace.id)}
+                onToggleCanvas={onToggleCanvas}
+                onSelectWorkspace={() => onSelectWorkspace(workspace)}
+                onSelectCanvas={onSelectCanvas}
+                onAddCanvas={workspace.id === activeWorkspace?.id ? onAddCanvas : undefined}
+                onRename={() => onRename({ kind: "workspace", id: workspace.id, name: workspace.name })}
+                onDelete={() => onDeleteWorkspace(workspace)}
+                onRenameCanvas={(canvas) => onRename({ kind: "canvas", id: canvas.id, name: canvas.name })}
+                onDeleteCanvas={onDeleteCanvas}
+                onDeleteNode={onDeleteNode}
+                onSetEntrypoint={onSetEntrypoint}
+                runs={runs}
+              />
+            );
+          })}
+          {!snapshot.workspaces.length ? <EmptySidebar label="No workspaces yet" action="Create Workspace" onClick={onNewWorkspace} /> : null}
+        </SidebarDisclosure>
+        <SidebarDisclosure label="Recent" open={recentOpen} onToggle={onToggleRecent}>
+          {recentCanvases.map((canvas) => (
+            <SidebarItem key={canvas.id} icon={<History />} active={canvas.id === activeCanvas?.id} trailing={<RuntimeIcon state={toRuntimeState(canvas.status)} />} onClick={() => onSelectCanvas(canvas)}>
+              {canvas.name}
+            </SidebarItem>
+          ))}
+          {!recentCanvases.length ? <EmptySidebar label="No recent canvases" /> : null}
+        </SidebarDisclosure>
+      </div>
+      <div className="sidebar-footer">
+        <SidebarItem icon={<Folder />} active={surface === "files"} onClick={() => onNavigate("files")}>Files</SidebarItem>
+        <SidebarItem icon={<Settings />} active={surface === "settings"} onClick={() => onNavigate("settings")}>Settings</SidebarItem>
+        <SidebarItem icon={<ShieldCheck />} active={surface === "environments"} onClick={() => onNavigate("environments")}>Environments</SidebarItem>
+        <SidebarItem icon={<Bot />} active={surface === "agents"} onClick={() => onNavigate("agents")}>Agents</SidebarItem>
+      </div>
+    </div>
+  );
+}
+
+function SidebarDisclosure({ label, open, onToggle, children }: { label: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <section className={`sidebar-disclosure ${open ? "is-open" : ""}`}>
+      <header>
+        <strong>{label}</strong>
+        <button type="button" aria-label={`${open ? "Collapse" : "Expand"} ${label}`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button>
+      </header>
+      {open ? <div>{children}</div> : null}
+    </section>
+  );
+}
+
+function WorkspaceRow({
+  workspace, canvases, current, open, activeCanvasId, expandedCanvases, nodes, onToggle, onToggleCanvas, onSelectWorkspace,
+  onSelectCanvas, onAddCanvas, onRename, onDelete, onRenameCanvas, onDeleteCanvas, onDeleteNode, onSetEntrypoint, runs,
+}: {
+  workspace: Workspace;
+  canvases: Canvas[];
+  current: boolean;
+  open: boolean;
+  activeCanvasId?: string;
+  expandedCanvases: Record<string, boolean>;
+  nodes: WireNode[];
+  onToggle: () => void;
+  onToggleCanvas: (id: string) => void;
+  onSelectWorkspace: () => void;
+  onSelectCanvas: (canvas: Canvas) => void;
+  onAddCanvas?: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onRenameCanvas: (canvas: Canvas) => void;
+  onDeleteCanvas: (canvas: Canvas) => void;
+  onDeleteNode: (nodeId: string) => void;
+  onSetEntrypoint: (nodeId: string) => void;
+  runs: Run[];
+}) {
+  const state = aggregateState(canvases.map((canvas) => toRuntimeState(canvas.status)));
+  return (
+    <section className={`workspace-row ${open ? "is-open" : ""} ${current ? "is-current" : ""}`}>
+      <div className="workspace-row__header">
+        <button type="button" className="workspace-row__chevron" aria-label={`${open ? "Collapse" : "Expand"} ${workspace.name}`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button>
+        <FolderOpen className="workspace-row__icon" aria-hidden="true" />
+        <button type="button" className="workspace-row__name workspace-row__name-button" onClick={onSelectWorkspace}>{workspace.name}</button>
+        <RuntimeIcon state={state} />
+        <span className="workspace-row__actions">
+          {onAddCanvas ? <Tooltip content="New Canvas"><IconButton label="New Canvas" size="small" onClick={onAddCanvas}><Plus /></IconButton></Tooltip> : null}
+          <Menu label={`${workspace.name} actions`} icon={<MoreHorizontal />} iconOnly items={[{ label: "Rename", icon: <Pencil />, onSelect: onRename }, { label: "Delete workspace", icon: <Trash2 />, onSelect: onDelete }]} />
+        </span>
+      </div>
+      {open ? (
+        <div className="workspace-row__children">
+          {canvases.map((canvas) => (
+            <CanvasRow
+              key={canvas.id}
+              canvas={canvas}
+              active={canvas.id === activeCanvasId}
+              open={expandedCanvases[canvas.id] ?? canvas.id === activeCanvasId}
+              nodes={nodes.filter((node) => node.canvasId === canvas.id).sort((left, right) => Number(right.id === canvas.defaultEntrypointNodeId) - Number(left.id === canvas.defaultEntrypointNodeId))}
+              onToggle={() => onToggleCanvas(canvas.id)}
+              onSelect={() => onSelectCanvas(canvas)}
+              onRename={() => onRenameCanvas(canvas)}
+              onDelete={() => onDeleteCanvas(canvas)}
+              onDeleteNode={onDeleteNode}
+              onSetEntrypoint={onSetEntrypoint}
+              run={runs.find((run) => run.canvasId === canvas.id && ["running", "queued", "waiting_input"].includes(run.status))}
+            />
+          ))}
+          {onAddCanvas ? <button type="button" className="workspace-add-canvas" onClick={onAddCanvas}><Plus /><span>New Canvas</span></button> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function CanvasRow({
+  canvas, active, open, nodes, onToggle, onSelect, onRename, onDelete, onDeleteNode, onSetEntrypoint, run,
+}: {
+  canvas: Canvas;
+  active: boolean;
+  open: boolean;
+  nodes: WireNode[];
+  onToggle: () => void;
+  onSelect: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onDeleteNode: (nodeId: string) => void;
+  onSetEntrypoint: (nodeId: string) => void;
+  run?: Run;
+}) {
+  const currentNode = run?.currentNodeId ? nodes.find((node) => node.id === run.currentNodeId) : undefined;
+  return (
+    <div className={`canvas-row ${active ? "is-active" : ""} ${open ? "is-open" : ""}`}>
+      <div className="canvas-row__header">
+        <button type="button" className="canvas-row__chevron" aria-label={`${open ? "Collapse" : "Expand"} ${canvas.name} nodes`} aria-expanded={open} onClick={onToggle}><ChevronRight /></button>
+        <button type="button" className="canvas-row__select" onClick={onSelect}><PanelsTopLeft /><span>{canvas.name}</span></button>
+        <span className="canvas-row__runtime">
+          {run ? <small title={`Current node: ${currentNode?.name ?? "Preparing"}`}>{currentNode?.name ?? "Running"}</small> : null}
+          <RuntimeIcon state={toRuntimeState(canvas.status)} />
+        </span>
+        <span className="canvas-row__actions"><Menu label={`${canvas.name} actions`} icon={<MoreHorizontal />} iconOnly items={[{ label: "Rename", icon: <Pencil />, onSelect: onRename }, { label: "Delete canvas", icon: <Trash2 />, onSelect: onDelete }]} /></span>
+      </div>
+      {open ? (
+        <div className="node-preview-list">
+          {nodes.map((node) => (
+            <div className="node-preview-row" key={node.id}>
+              <Bot />
+              <span title={node.name}>{node.name}</span>
+              {canvas.defaultEntrypointNodeId === node.id ? <span className="node-preview-row__primary" title="Canvas entry node"><CirclePlay /></span> : <Tooltip content="Set as canvas entry node"><IconButton label={`Set ${node.name} as canvas entry node`} size="small" className="node-preview-row__set-primary" onClick={() => onSetEntrypoint(node.id)}><CirclePlay /></IconButton></Tooltip>}
+              <Menu label={`${node.name} actions`} icon={<MoreHorizontal />} iconOnly items={[{ label: "Canvas entry", icon: <CirclePlay />, disabled: true, onSelect: () => undefined }, { label: "Delete node", icon: <Trash2 />, onSelect: () => onDeleteNode(node.id) }]} />
+            </div>
+          ))}
+          {!nodes.length ? <span className="node-preview-empty">No nodes</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EmptySidebar({ label, action, onClick }: { label: string; action?: string; onClick?: () => void }) {
+  return <div className="sidebar-empty">{label}{action ? <button type="button" onClick={onClick}>{action}</button> : null}</div>;
+}
+
+function RuntimeIcon({ state }: { state: RuntimeState }) {
+  const Icon = state === "running" ? LoaderCircle : state === "success" ? CheckCircle2 : state === "waiting" ? Clock3 : state === "error" ? CircleAlert : CirclePlay;
+  return <Icon className={`canvas-runtime-icon is-${state}`} aria-label={stateLabel(state)} />;
+}
+
+function CanvasSurface({
+  workspaceName, canvas, openCanvases, nodes, edges, selectedNodeId, selectedEdgeId, connectionSource, nodeLibraryOpen, runHistoryOpen, runs, runPanelOpen, runState, currentNodeId,
+  graphValidation, otherActiveRuns, onSelectNode, onSelectEdge, onDeleteEdge, onPortConnect, onNodeMoved, onToggleNodeLibrary, onCloseNodeLibrary, onAddNode, onToggleRunHistory, onCloseRunHistory, onRun,
+  onToggleRunPanel, onAddCanvas, onSaveRevision, onCancelConnection, onSelectCanvas, onCloseCanvas,
+}: {
+  workspaceName: string;
+  canvas?: Canvas;
+  openCanvases: Canvas[];
+  nodes: WireNode[];
+  edges: CanvasEdge[];
+  selectedNodeId?: string;
+  selectedEdgeId?: string;
+  connectionSource: { nodeId: string; portId: string; kind: PortKind } | null;
+  nodeLibraryOpen: boolean;
+  runHistoryOpen: boolean;
+  runs: Run[];
+  runPanelOpen: boolean;
+  runState: RuntimeState;
+  currentNodeId?: string;
+  graphValidation: GraphValidation;
+  otherActiveRuns: string[];
+  onSelectNode: (id: string) => void;
+  onSelectEdge: (id: string) => void;
+  onDeleteEdge: (id: string) => void;
+  onPortConnect: (nodeId: string, portId: string, direction: "input" | "output", kind: PortKind, dragSource?: { nodeId: string; portId: string; kind: PortKind; pointerId: number }) => void;
+  onNodeMoved: (nodeId: string, position: { x: number; y: number }) => void;
+  onToggleNodeLibrary: () => void;
+  onCloseNodeLibrary: () => void;
+  onAddNode: (name: string, position?: { x: number; y: number }) => void;
+  onToggleRunHistory: () => void;
+  onCloseRunHistory: () => void;
+  onRun: () => void;
+  onToggleRunPanel: () => void;
+  onAddCanvas: () => void;
+  onSaveRevision: () => void;
+  onCancelConnection: () => void;
+  onSelectCanvas: (canvas: Canvas) => void;
+  onCloseCanvas: (canvasId: string) => void;
+}) {
+  const [zoom, setZoom] = useState(100);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [edgePaths, setEdgePaths] = useState<Array<{ id: string; d: string }>>([]);
+  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
+  const nodePositionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const [dragConnection, setDragConnection] = useState<null | { nodeId: string; portId: string; kind: PortKind; x: number; y: number; pointerId: number }>(null);
+  const [dragNode, setDragNode] = useState<null | { nodeId: string; pointerId: number; offsetX: number; offsetY: number }>(null);
+  const tabRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const suppressNextPortClick = useRef(false);
+  useEffect(() => {
+    setNodePositions({});
+    nodePositionsRef.current = {};
+    setDragNode(null);
+    setDragConnection(null);
+  }, [canvas?.id]);
+  useEffect(() => {
+    if (canvas?.id) tabRefs.current[canvas.id]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [canvas?.id, openCanvases.length]);
+  const positions = nodes.map((node, index) => {
+    const stored = nodePositions[node.id] ?? node.config?.position;
+    return stored && typeof stored === "object" && typeof stored.x === "number" && typeof stored.y === "number"
+      ? { x: stored.x, y: stored.y, cssLeft: `${stored.x}px`, cssTop: `${stored.y}px` }
+      : nodePosition(index);
+  });
+  const canvasPoint = (event: { clientX: number; clientY: number }) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    return rect ? { x: event.clientX - rect.left, y: event.clientY - rect.top } : { x: event.clientX, y: event.clientY };
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragConnection) {
+      const point = canvasPoint(event);
+      setDragConnection({ ...dragConnection, x: point.x, y: point.y });
+    }
+    if (dragNode) {
+      const point = canvasPoint(event);
+      const x = Math.max(8, point.x - dragNode.offsetX);
+      const y = Math.max(70, point.y - dragNode.offsetY);
+      const next = { x, y };
+      nodePositionsRef.current = { ...nodePositionsRef.current, [dragNode.nodeId]: next };
+      setNodePositions((current) => ({ ...current, [dragNode.nodeId]: next }));
+    }
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragConnection && event.pointerId === dragConnection.pointerId) {
+      setDragConnection(null);
+    }
+    if (dragNode && event.pointerId === dragNode.pointerId) {
+      setDragNode(null);
+      const position = nodePositionsRef.current[dragNode.nodeId] ?? nodePositions[dragNode.nodeId];
+      if (position) {
+        onNodeMoved(dragNode.nodeId, position);
+        const element = canvasRef.current?.querySelector<HTMLElement>(`[data-node-id="${dragNode.nodeId}"]`);
+        if (element) {
+          element.style.left = `${position.x}px`;
+          element.style.top = `${position.y}px`;
+        }
+      }
+    }
+  };
+  useLayoutEffect(() => {
+    const surface = canvasRef.current;
+    if (!surface) return;
+    const updatePaths = () => {
+      const surfaceRect = surface.getBoundingClientRect();
+      const portElements = Array.from(surface.querySelectorAll<HTMLElement>("[data-port-key]"));
+      const paths = edges.flatMap((edge) => {
+        const source = portElements.find((element) => element.dataset.portKey === `${edge.sourceNodeId}:${edge.sourcePortId}`);
+        const target = portElements.find((element) => element.dataset.portKey === `${edge.targetNodeId}:${edge.targetPortId}`);
+        if (!source || !target) return [];
+        const sourceRect = source.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const sx = sourceRect.left - surfaceRect.left + sourceRect.width / 2;
+        const sy = sourceRect.top - surfaceRect.top + sourceRect.height / 2;
+        const tx = targetRect.left - surfaceRect.left + targetRect.width / 2;
+        const ty = targetRect.top - surfaceRect.top + targetRect.height / 2;
+        const bend = Math.max(48, Math.abs(tx - sx) * 0.45);
+        return [{ id: edge.id, d: `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}` }];
+      });
+      setEdgePaths(paths);
+    };
+    updatePaths();
+    const observer = new ResizeObserver(updatePaths);
+    observer.observe(surface);
+    surface.querySelectorAll<HTMLElement>(".sk-node").forEach((node) => observer.observe(node));
+    window.addEventListener("resize", updatePaths);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updatePaths);
+    };
+  }, [edges, nodes, nodePositions, zoom]);
+  if (!canvas) {
+    return <div className="surface-empty"><Folder /><strong>No canvas selected</strong><p>Create a canvas from the left navigation.</p></div>;
+  }
+  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+  const selectedEdgeSource = selectedEdge ? nodes.find((node) => node.id === selectedEdge.sourceNodeId) : undefined;
+  const selectedEdgeTarget = selectedEdge ? nodes.find((node) => node.id === selectedEdge.targetNodeId) : undefined;
+  const selectedEdgeSourcePort = selectedEdgeSource?.ports.find((port) => port.id === selectedEdge?.sourcePortId);
+  const selectedEdgeTargetPort = selectedEdgeTarget?.ports.find((port) => port.id === selectedEdge?.targetPortId);
+  const onDropNode = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const name = event.dataTransfer.getData("application/x-seekwd-node") || event.dataTransfer.getData("text/plain");
+    if (!name) return;
+    const point = canvasPoint(event);
+    onAddNode(name, { x: Math.max(8, point.x - 120), y: Math.max(70, point.y - 40) });
+  };
+  return (
+    <div className="canvas-preview" ref={canvasRef} onDragOver={(event) => event.preventDefault()} onDrop={onDropNode} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+      <div className="canvas-tabbar">
+        {openCanvases.map((tab) => <div className={`canvas-tab ${tab.id === canvas.id ? "is-active" : ""}`} key={tab.id} ref={(element) => { tabRefs.current[tab.id] = element; }} onMouseDown={(event) => { if (event.button === 1) { event.preventDefault(); onCloseCanvas(tab.id); } }}>
+          <button type="button" className="canvas-tab__select" onClick={() => onSelectCanvas(tab)}><PanelsTopLeft /><span>{tab.name}</span>{tab.draftDirty ? <i title="Unsaved changes" /> : null}</button>
+          <button type="button" className="canvas-tab__close" aria-label={`Close ${tab.name}`} onClick={() => onCloseCanvas(tab.id)}><X /></button>
+        </div>)}
+        <button type="button" aria-label="New canvas tab" title="New canvas tab" onClick={onAddCanvas}><Plus /></button>
+      </div>
+      <div className="canvas-breadcrumb">
+        <span>{workspaceName}</span><ChevronRight /><strong>{canvas.name}</strong>
+        {connectionSource || dragConnection ? <span className="canvas-connection-status"><span className="canvas-connection-status__dot" />Select a compatible input port <button type="button" onClick={onCancelConnection}>Cancel</button></span> : null}
+        {selectedEdge ? <span className="canvas-connection-status is-selected"><span className="canvas-connection-status__dot" />Selected: {selectedEdgeSourcePort?.name ?? "Output"} → {selectedEdgeTargetPort?.name ?? "Input"} <button type="button" onClick={() => onDeleteEdge(selectedEdge.id)}>Delete</button></span> : null}
+        {otherActiveRuns.length ? <span className="canvas-other-runs" title={otherActiveRuns.join("\n")}><LoaderCircle />{otherActiveRuns.length} other canvas{otherActiveRuns.length === 1 ? "" : "es"} running</span> : null}
+      </div>
+      <div className="canvas-actions" aria-label="Canvas actions">
+        <Tooltip content="Add node" side="top"><IconButton label="Add node" active={nodeLibraryOpen} onClick={onToggleNodeLibrary}><Blocks /></IconButton></Tooltip>
+        <Tooltip content={canvas.draftDirty ? "Save revision before running" : "Save revision"} side="top"><IconButton label="Save revision" active={canvas.draftDirty} onClick={onSaveRevision}><ArrowUpFromLine /></IconButton></Tooltip>
+        <Tooltip content={!graphValidation.valid ? graphValidation.message : canvas.draftDirty ? "Save the current graph, create a revision, then run it" : runState === "running" ? "A run is already active" : runState === "waiting" ? "This run is waiting for input" : "Run this saved revision"} side="top"><span><Button variant="primary" size="small" leadingIcon={<Play />} onClick={onRun} disabled={!graphValidation.valid || runState === "running" || runState === "waiting"}>{runState === "running" ? "Running" : runState === "waiting" ? "Waiting" : canvas.draftDirty ? "Save & Run" : "Run"}</Button></span></Tooltip>
+        {!graphValidation.valid ? <span className="canvas-run-validation" role="status"><CircleAlert />{graphValidation.message}</span> : null}
+        <Tooltip content="Run history" side="top"><IconButton label="Run history" active={runHistoryOpen} onClick={onToggleRunHistory}><History /></IconButton></Tooltip>
+        <Tooltip content="Toggle run output" side="top"><IconButton label="Toggle run output" active={runPanelOpen} onClick={onToggleRunPanel}><PanelBottom /></IconButton></Tooltip>
+      </div>
+      <svg className="canvas-edges" aria-label="Canvas connections">
+        {edgePaths.map((path) => <g key={path.id} className={selectedEdgeId === path.id ? "is-selected" : ""} onClick={(event) => { event.stopPropagation(); onSelectEdge(path.id); }}>
+          <path className="edge-hit" d={path.d} pathLength={1} />
+          <path className="edge-visible" d={path.d} pathLength={1} />
+        </g>)}
+        {dragConnection ? (() => {
+          const source = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>("[data-port-key]") ?? [])
+            .find((element) => element.dataset.portKey === `${dragConnection.nodeId}:${dragConnection.portId}`);
+          const surfaceRect = canvasRef.current?.getBoundingClientRect();
+          if (!source || !surfaceRect) return null;
+          const sourceRect = source.getBoundingClientRect();
+          const sx = sourceRect.left - surfaceRect.left + sourceRect.width / 2;
+          const sy = sourceRect.top - surfaceRect.top + sourceRect.height / 2;
+          const bend = Math.max(48, Math.abs(dragConnection.x - sx) * 0.45);
+          return <path className="is-draft" d={`M ${sx} ${sy} C ${sx + bend} ${sy}, ${dragConnection.x - bend} ${dragConnection.y}, ${dragConnection.x} ${dragConnection.y}`} />;
+        })() : null}
+      </svg>
+      {nodes.map((node, index) => (
+        <WorkbenchNode
+          key={node.id}
+          node={node}
+          index={index}
+          position={positions[index]}
+          selected={node.id === selectedNodeId}
+          primary={node.id === canvas.defaultEntrypointNodeId}
+          state={node.id === currentNodeId ? (runState === "waiting" ? "waiting" : "running") : node.id === canvas.defaultEntrypointNodeId ? (runState === "success" ? "success" : "idle") : "idle"}
+          incoming={edges.filter((edge) => edge.targetNodeId === node.id)}
+          outgoing={edges.filter((edge) => edge.sourceNodeId === node.id)}
+          connectionSource={connectionSource ?? (dragConnection ? { nodeId: dragConnection.nodeId, portId: dragConnection.portId, kind: dragConnection.kind } : null)}
+          onSelect={() => onSelectNode(node.id)}
+          onPortConnect={(nodeId, portId, direction, kind, dragSource) => {
+            if (suppressNextPortClick.current) {
+              suppressNextPortClick.current = false;
+              return;
+            }
+            onPortConnect(nodeId, portId, direction, kind, dragSource);
+          }}
+          onPortPointerDown={(event, portId, direction, kind) => {
+            if (direction !== "output") return;
+            const point = canvasPoint(event);
+            setDragConnection({ nodeId: node.id, portId, kind, x: point.x, y: point.y, pointerId: event.pointerId });
+          }}
+          onPortPointerUp={(event, portId, direction, kind) => {
+            if (!dragConnection || direction !== "input") return;
+            if (event.pointerId !== dragConnection.pointerId) return;
+            suppressNextPortClick.current = true;
+            onPortConnect(node.id, portId, direction, kind, dragConnection);
+            setDragConnection(null);
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+          }}
+          onNodePointerDown={(event) => {
+            if ((event.target as HTMLElement).closest("button")) return;
+            const nodeRect = (event.currentTarget.closest("[data-node-id]") as HTMLElement | null)?.getBoundingClientRect();
+            const surfaceRect = canvasRef.current?.getBoundingClientRect();
+            if (!nodeRect || !surfaceRect) return;
+            setDragNode({ nodeId: node.id, pointerId: event.pointerId, offsetX: event.clientX - nodeRect.left, offsetY: event.clientY - nodeRect.top });
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+        />
+      ))}
+      {nodes.length > 0 && edges.length === 0 ? <div className="canvas-guide" role="note"><strong>Build the first path</strong><span>For Hello World, add <b>Text Input</b> and <b>Text Output</b>. Set the input value, connect <b>Start → Text Output.Start</b> for flow, then connect <b>Text Input.Text → Text Output.Input</b> for data.</span></div> : null}
+      {!nodes.length ? <div className="canvas-empty-hint">Add a node to start building this canvas.</div> : null}
+      {nodeLibraryOpen ? <NodeLibrary onAdd={onAddNode} onClose={onCloseNodeLibrary} /> : null}
+      {runHistoryOpen ? <RunHistoryPanel canvas={canvas} runs={runs} onClose={onCloseRunHistory} /> : null}
+      <AgentComposer workspaceName={workspaceName} />
+      <div className="canvas-zoom"><button type="button" aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(50, value - 10))}>−</button><span>{zoom}%</span><button type="button" aria-label="Zoom in" onClick={() => setZoom((value) => Math.min(200, value + 10))}><Plus /></button></div>
+    </div>
+  );
+}
+
+function WorkbenchNode({
+  node, position, selected, primary, state, incoming, outgoing, connectionSource, onSelect, onPortConnect,
+  onPortPointerDown, onPortPointerUp, onNodePointerDown,
+}: {
+  node: WireNode;
+  index: number;
+  position: { x: number; y: number; cssLeft: string; cssTop: string };
+  selected: boolean;
+  primary: boolean;
+  state: "idle" | "running" | "waiting" | "success" | "error";
+  incoming: CanvasEdge[];
+  outgoing: CanvasEdge[];
+  connectionSource: { nodeId: string; portId: string; kind: PortKind } | null;
+  onSelect: () => void;
+  onPortConnect: (nodeId: string, portId: string, direction: "input" | "output", kind: PortKind, dragSource?: { nodeId: string; portId: string; kind: PortKind; pointerId: number }) => void;
+  onPortPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>, portId: string, direction: "input" | "output", kind: PortKind) => void;
+  onPortPointerUp?: (event: ReactPointerEvent<HTMLButtonElement>, portId: string, direction: "input" | "output", kind: PortKind) => void;
+  onNodePointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
+}) {
+  const definition = nodeDefinition(node);
+  return (
+    <CanvasNode
+      nodeId={node.id}
+      className="node-added"
+      style={{ left: position.cssLeft, top: position.cssTop }}
+      title={node.name}
+      typeLabel={definition.typeLabel}
+      description={definition.description}
+      icon={definition.icon}
+      state={state}
+      selected={selected}
+      primary={primary}
+      inputs={definition.inputs.map((port) => ({ ...port, connectionCount: incoming.filter((edge) => edge.targetPortId === port.id).length }))}
+      outputs={definition.outputs.map((port) => ({ ...port, connectionCount: outgoing.filter((edge) => edge.sourcePortId === port.id).length }))}
+      activePortKey={connectionSource?.nodeId === node.id ? `${node.id}:${connectionSource.portId}` : null}
+      acceptingConnectionKind={connectionSource?.nodeId !== node.id ? connectionSource?.kind : null}
+      onClick={onSelect}
+      onPortConnect={(portId, direction, kind) => onPortConnect(node.id, portId, direction, kind)}
+      onPortPointerDown={onPortPointerDown}
+      onPortPointerUp={onPortPointerUp}
+      onNodePointerDown={onNodePointerDown}
+      footer={primary ? "Default entry" : node.kind}
+    />
+  );
+}
+
+function NodeLibrary({ onAdd, onClose }: { onAdd: (name: string) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const definitions = [
+    { name: "Text Input", category: "Input", description: "Provide text or instructions", icon: <Type />, available: true },
+    { name: "Text Output", category: "Output", description: "Display a connected text value", icon: <ArrowUpFromLine />, available: true },
+    { name: "Review sources", category: "Human task", description: "Review connected sources and submit a result", icon: <Type />, available: true },
+    { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen />, available: false },
+    { name: "Human Approval", category: "Control", description: "Preview: approval executor is not installed", icon: <Pause />, available: false },
+    { name: "Event Trigger", category: "Trigger", description: "Preview: event delivery is not installed", icon: <Zap />, available: false },
+  ].filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(query.toLowerCase()));
+  return (
+    <aside className="node-library" aria-label="Node Library">
+      <header><span><Blocks /><strong>Node Library</strong></span><IconButton label="Close node library" size="small" onClick={onClose}><X /></IconButton></header>
+      <div className="node-library__search"><TextField aria-label="Search nodes" leadingIcon={<Search />} placeholder="Search nodes" value={query} onChange={(event) => setQuery(event.target.value)} clearable /></div>
+      <div className="node-library__list">
+        {definitions.map((item) => <button type="button" key={item.name} draggable={item.available} disabled={!item.available} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-seekwd-node", item.name); event.dataTransfer.setData("text/plain", item.name); }} onClick={() => item.available && onAdd(item.name)}><span className="node-library__icon">{item.icon}</span><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.available ? <Plus /> : <span className="node-library__preview">Preview</span>}</button>)}
+        {!definitions.length ? <p>No matching nodes</p> : null}
+      </div>
+    </aside>
+  );
+}
+
+function RunHistoryPanel({ canvas, runs, onClose }: { canvas: Canvas; runs: Run[]; onClose: () => void }) {
+  const orderedRuns = [...runs].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  return (
+    <aside className="run-history" aria-label="Run history">
+      <header className="run-history__header"><div><History /><span><strong>Run History</strong><small>{canvas.name}</small></span></div><IconButton label="Close run history" size="small" onClick={onClose}><X /></IconButton></header>
+      <div className="run-history__session"><CirclePlay /><span><strong>Canvas session</strong><small>Local Host graph validation</small></span><StatusBadge tone={toRuntimeState(canvas.status) === "running" ? "info" : "neutral"}>{stateLabel(toRuntimeState(canvas.status))}</StatusBadge></div>
+      <div className="run-history__list">{orderedRuns.length ? orderedRuns.map((run) => <div className="run-history__item" key={run.id}><span className={`run-history__item-icon is-${run.status === "failed" ? "danger" : run.status === "succeeded" ? "success" : "info"}`}>{run.status === "running" ? <LoaderCircle /> : run.status === "succeeded" ? <CheckCircle2 /> : run.status === "failed" ? <CircleAlert /> : <Clock3 />}</span><span className="run-history__item-copy"><strong>{run.status}</strong><small>Revision {run.revision} · {new Date(run.startedAt).toLocaleString()}</small></span><StatusBadge tone={run.status === "succeeded" ? "success" : run.status === "failed" ? "danger" : "info"}>{run.status}</StatusBadge></div>) : <p className="run-empty">No Host runs for this canvas.</p>}</div>
+      <footer className="run-history__footer"><span>Runs are scoped to this canvas.</span></footer>
+    </aside>
+  );
+}
+
+function AgentComposer({ workspaceName }: { workspaceName: string }) {
+  const [value, setValue] = useState("");
+  return (
+    <section className="agent-composer" aria-label="Agent conversation">
+      <div className="agent-composer__scope-row"><div className="agent-composer__scope"><button type="button" className="agent-composer__scope-trigger"><FolderOpen /><span>{workspaceName}</span></button><IconButton label="Remove workspace scope" size="small"><X /></IconButton></div></div>
+      <div className="agent-composer__surface">
+        <AutoGrowTextArea aria-label="Message the agent" placeholder="Agent Runtime is not connected in this MVP" value={value} onChange={(event) => setValue(event.target.value)} />
+        <footer><Tooltip content="Attach context"><IconButton label="Attach context" size="small" disabled><Paperclip /></IconButton></Tooltip><span className="agent-composer__unavailable">Agent Runtime unavailable</span><span className="agent-composer__spacer" /><Tooltip content="Send request"><IconButton label="Send request" disabled><ArrowUp /></IconButton></Tooltip></footer>
+      </div>
+    </section>
+  );
+}
+
+function NodeInspector({ node, canvas, configDraft, onAddPort, onDeleteNode, onFlushNodeConfig, onUpdateNode }: { node?: WireNode; canvas?: Canvas; configDraft?: Record<string, unknown>; onAddPort?: () => void; onDeleteNode?: () => void; onFlushNodeConfig?: (nodeId: string) => void; onUpdateNode?: (nodeId: string, input: { config?: Record<string, unknown> }) => void }) {
+  if (!node) return <div className="inspector-empty">Select a node to inspect it.</div>;
+  const definition = nodeDefinition(node);
+  const isInput = node.kind === "input.text" || node.kind === "input.file";
+  const inputValue = typeof configDraft?.inputValue === "string" ? configDraft.inputValue : typeof node.config?.inputValue === "string" ? node.config.inputValue : "";
+  const instruction = typeof configDraft?.instruction === "string" ? configDraft.instruction : typeof node.config?.instruction === "string" ? node.config.instruction : "";
+  const updateConfig = (config: Record<string, unknown>) => onUpdateNode?.(node.id, { config });
+  return (
+    <>
+      <PanelHeader title="Inspector" trailing={<Menu label="Node actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Delete node", icon: <Trash2 />, onSelect: () => onDeleteNode?.() }]} />} />
+      <div className="inspector-summary"><span className="summary-icon">{definition.icon}</span><span><strong>{node.name}</strong><small>{definition.typeLabel}</small></span></div>
+      <InspectorSection title="General"><PropertyRow label="Name"><TextField value={node.name} readOnly aria-label="Node name" /></PropertyRow><PropertyRow label="Kind"><code className="inspector-code">{node.kind}</code></PropertyRow></InspectorSection>
+      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is the single manual entrypoint. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}</InspectorSection>
+      <InspectorSection title="Execution"><PropertyRow label="Canvas"><span className="value-select">{canvas?.name ?? "Unknown"}</span></PropertyRow><Switch label="Repair on failure" description="Allow structured repair proposals for this node." defaultChecked /></InspectorSection>
+      <InspectorSection title="Ports" action={onAddPort ? <IconButton label="Add port" size="small" onClick={onAddPort}><Plus /></IconButton> : undefined}>{node.ports.map((port) => <div className="port-row" key={port.id}><span className={`port-direction is-${port.direction}`} aria-hidden="true">{port.direction === "input" ? <ArrowDownToLine /> : <ArrowUpFromLine />}</span><span>{port.name}</span><code>{port.direction} · {port.kind}</code></div>)}{!node.ports.length ? <span className="inspector-muted">No ports configured.</span> : null}</InspectorSection>
+      {onDeleteNode ? <div className="inspector-danger-action"><Button variant="danger" leadingIcon={<Trash2 />} onClick={onDeleteNode}>Delete node</Button></div> : null}
+    </>
+  );
+}
+
+function ConnectionInspector({ edge, nodes, onDelete }: { edge: CanvasEdge; nodes: WireNode[]; onDelete: () => void }) {
+  const source = nodes.find((node) => node.id === edge.sourceNodeId);
+  const target = nodes.find((node) => node.id === edge.targetNodeId);
+  const sourcePort = source?.ports.find((port) => port.id === edge.sourcePortId);
+  const targetPort = target?.ports.find((port) => port.id === edge.targetPortId);
+  return <><PanelHeader title="Connection" /><div className="connection-inspector"><strong>{source?.name ?? "Unknown"} → {target?.name ?? "Unknown"}</strong><span>{sourcePort?.name ?? "Missing port"} → {targetPort?.name ?? "Missing port"}</span><code>{edge.kind} · {edge.id}</code></div><div className="inspector-danger-action"><Button variant="danger" leadingIcon={<Trash2 />} onClick={onDelete}>Delete connection</Button></div></>;
+}
+
+function RunPanel({ run, canvas, nodes, value, onValueChange, onSubmit }: { run?: Run; canvas?: Canvas; nodes: WireNode[]; value: string; onValueChange: (value: string) => void; onSubmit: () => void }) {
+  const status = run?.status === "succeeded" ? "success" : run?.status === "failed" ? "error" : run?.status === "waiting_input" ? "waiting" : run?.status === "running" ? "running" : "idle";
+  const currentNode = run?.currentNodeId ? nodes.find((node) => node.id === run.currentNodeId) : undefined;
+  return (
+    <div className={`run-panel ${run?.status === "waiting_input" ? "is-waiting" : ""}`}>
+      <PanelHeader title="Run output" trailing={<Toolbar><span className="run-context-label">{canvas?.name ?? "No canvas"}</span><StatusBadge tone={status === "success" ? "success" : status === "error" ? "danger" : status === "waiting" ? "warning" : "info"} dot>{run?.status ?? "No run"}</StatusBadge><IconButton label="Run actions" size="small"><MoreHorizontal /></IconButton></Toolbar>} />
+      <div className="run-content"><div className="run-tabs"><button className="is-active">Run</button><button disabled>Logs</button><button disabled>Issues</button></div><div className="run-events">{run ? <><p className="run-disclosure">{run.status === "waiting_input" ? "The local Host reached the next interactive node. Submit its result to continue." : "This run is executed by the local Host. Text Input and Text Output are supported locally."}</p>{run.status === "waiting_input" ? <div className="run-input-card"><strong>{currentNode?.name ?? "Input required"}</strong><span>{run.inputPrompt ?? "Enter a result for the current node."}</span><AutoGrowTextArea aria-label="Node result" maxHeight={120} value={value} onChange={(event) => onValueChange(event.target.value)} placeholder="Enter the result or decision..." /><Button variant="primary" leadingIcon={<ArrowUp />} onClick={onSubmit} disabled={!value.trim()}>Submit result</Button></div> : null}{run.status === "succeeded" && run.result ? <div className="run-result-card"><strong>Output</strong><pre>{run.result}</pre></div> : null}{run.status === "failed" && run.inputPrompt ? <div className="run-error-card"><strong>Run failed</strong><span>{run.inputPrompt}</span></div> : null}<dl className="run-details"><div><dt>Run ID</dt><dd>{run.id}</dd></div><div><dt>Canvas</dt><dd>{canvas?.name ?? "Unknown"}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>Current node</dt><dd>{currentNode?.name ?? (run.status === "succeeded" ? "Completed" : "Preparing")}</dd></div><div><dt>Started</dt><dd>{new Date(run.startedAt).toLocaleString()}</dd></div><div><dt>Finished</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : "In progress"}</dd></div></dl></> : <p className="run-empty">No Host run has been started.</p>}</div></div>
+    </div>
+  );
+}
+
+function SurfacePage({ surface, workspaceName, settings, onSettingsChange, onNotice }: { surface: Exclude<Surface, "canvas">; workspaceName: string; settings: SettingsState; onSettingsChange: (key: keyof SettingsState, value: boolean) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+  if (surface === "settings") return <SettingsPage settings={settings} onChange={onSettingsChange} />;
+  const config: Record<Exclude<Surface, "canvas" | "settings">, { eyebrow: string; title: string; description: string; icon: ReactNode }> = {
+    automations: { eyebrow: "Workspace automation", title: "Automations", description: "Schedule canvas entrypoints and keep recurring work visible.", icon: <CalendarClock /> },
+    extensions: { eyebrow: "Workspace capabilities", title: "Extensions", description: "Connect approved capabilities to the active workspace.", icon: <Blocks /> },
+    files: { eyebrow: "Workspace content", title: "Files", description: `Browse artifacts available to ${workspaceName}.`, icon: <Folder /> },
+    environments: { eyebrow: "Execution boundary", title: "Environments", description: "Choose where nodes execute and inspect active safety limits.", icon: <ShieldCheck /> },
+    agents: { eyebrow: "Delegated work", title: "Agents", description: "Manage agents that can propose structured work.", icon: <Bot /> },
+  };
+  const item = config[surface];
+  return <div className="surface-page"><SurfaceHeader {...item} action={surface === "automations" ? <Button variant="primary" leadingIcon={<Plus />} disabled title="Scheduler API is not available in this MVP">New Automation</Button> : undefined} /><SurfaceSection title={surface === "automations" ? "Schedules" : surface === "extensions" ? "Extension catalog" : surface === "files" ? "Recent files" : surface === "environments" ? "Execution profiles" : "Workspace agents"} description="Only operations backed by the local Host are enabled in this MVP."><SurfaceContent surface={surface} onNotice={onNotice} /></SurfaceSection></div>;
+}
+
+function SurfaceContent({ surface, onNotice }: { surface: Exclude<Surface, "canvas" | "settings">; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+  if (surface === "automations") return <div className="automation-list"><article className="automation-row"><div className="automation-row__icon"><CalendarClock /></div><div className="automation-row__main"><div className="automation-row__title"><strong>Scheduler API</strong><StatusBadge tone="neutral">Unavailable</StatusBadge></div><span>Automation persistence and execution are not part of this MVP.</span><small>Use the canvas Run action for a real local Host run.</small></div><div className="automation-row__controls"><Switch label="" aria-label="Scheduler unavailable" disabled /><Menu label="Automation actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Run now", icon: <Play />, disabled: true, onSelect: () => undefined }, { label: "Edit", icon: <Pencil />, disabled: true, onSelect: () => undefined }]} /></div></article></div>;
+  if (surface === "extensions") return <div className="extension-grid"><article className="extension-card is-installed"><div className="extension-card__top"><div className="extension-card__icon"><Code2 /></div><div className="extension-card__heading"><strong>Local Restricted Runtime</strong><span>Seekwd · v0.1</span></div><StatusBadge tone="success" dot>Host active</StatusBadge></div><p>Current MVP policy: read-only workspace boundary, no network, cancellable Host process.</p><div className="extension-card__footer"><Switch label="" aria-label="Runtime is managed by Host" checked disabled /><div className="extension-card__actions"><Button size="small" disabled title="Permission management API is not available in this MVP">View permissions</Button><Menu label="Extension actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Open documentation", icon: <ExternalLink />, disabled: true, onSelect: () => undefined }, { label: "Uninstall", icon: <Trash2 />, disabled: true, onSelect: () => undefined }]} /></div></div></article></div>;
+  if (surface === "files") return <div className="file-list">{["research-notes.md", "citation-review.json", "experiment-report.md", "sources.bib"].map((file, index) => <div className="file-list__row" key={file}><FileCode2 /><span><strong>{file}</strong><small>{index % 2 ? "Generated artifact" : "Workspace file"} · Host file API not connected</small></span><StatusBadge tone="neutral">Read-only</StatusBadge></div>)}</div>;
+  if (surface === "environments") return <div className="environment-list"><div className="environment-list__row is-selected"><div><strong>Local Restricted</strong><span>Read-only workspace · no network · cancellable</span></div><StatusBadge tone="success" dot>Active</StatusBadge></div><div className="environment-list__row"><div><strong>Docker Sandbox</strong><span>Requires a sandbox worker that is not installed.</span></div><StatusBadge tone="neutral">Unavailable</StatusBadge></div></div>;
+  return <div className="agent-list"><div className="agent-row"><div className="agent-avatar"><Bot /></div><div><strong>Agent Runtime</strong><span>Natural-language graph changes are not connected in this MVP.</span><small>Use node, port, edge, revision and Run actions directly.</small></div><Switch label="" aria-label="Agent runtime unavailable" disabled /></div></div>;
+}
+
+function SettingsPage({ settings, onChange }: { settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void }) {
+  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection></div></div></div>;
+}
+
+function SurfaceHeader({ eyebrow, title, description, icon, action }: { eyebrow: string; title: string; description: string; icon: ReactNode; action?: ReactNode }) {
+  return <header className="surface-header"><div className="surface-header__icon">{icon}</div><div className="surface-header__copy"><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action ? <div className="surface-header__action">{action}</div> : null}</header>;
+}
+
+function SurfaceSection({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return <section className="surface-section"><div className="surface-section__heading"><div><h2>{title}</h2>{description ? <p>{description}</p> : null}</div></div>{children}</section>;
+}
+
+function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[], edges: CanvasEdge[]): GraphValidation {
+  if (!canvas) return { valid: false, message: "Select a canvas before running." };
+  if (!canvas.defaultEntrypointNodeId) return { valid: false, message: "This canvas has no manual entrypoint. Configure an entrypoint only if it should be run directly." };
+  if (!nodes.length) return { valid: false, message: "This canvas has no nodes. Add nodes before configuring a manual entrypoint." };
+  const entry = nodes.find((node) => node.id === canvas.defaultEntrypointNodeId);
+  if (!entry) return { valid: false, message: "The configured entry node is missing from this canvas." };
+  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text"]);
+  const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
+  if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const adjacency = new Map<string, string[]>();
+  for (const edge of edges) {
+    const source = nodeById.get(edge.sourceNodeId);
+    const target = nodeById.get(edge.targetNodeId);
+    if (!source || !target) return { valid: false, message: "A connection points to a node outside this canvas." };
+    if (source.id === target.id) return { valid: false, message: "A node cannot connect to itself." };
+    const sourcePort = source.ports.find((port) => port.id === edge.sourcePortId);
+    const targetPort = target.ports.find((port) => port.id === edge.targetPortId);
+    if (!sourcePort || !targetPort) return { valid: false, message: "A connection points to a missing port." };
+    if (sourcePort.direction !== "output" || targetPort.direction !== "input") {
+      return { valid: false, message: "Connections must run from an output port to an input port." };
+    }
+    if (sourcePort.kind !== targetPort.kind || sourcePort.kind !== edge.kind) {
+      return { valid: false, message: `The ${sourcePort.name} and ${targetPort.name} port types do not match.` };
+    }
+    if (edge.kind === "flow") {
+      const next = adjacency.get(source.id) ?? [];
+      next.push(target.id);
+      adjacency.set(source.id, next);
+    }
+  }
+  const reachable = new Set<string>();
+  const queue = [entry.id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (reachable.has(id)) continue;
+    reachable.add(id);
+    queue.push(...(adjacency.get(id) ?? []));
+  }
+  const unreachable = nodes.find((node) => !reachable.has(node.id) && !isPassiveSourceNode(node));
+  if (unreachable) {
+    return {
+      valid: false,
+      message: `Connect ${unreachable.name} to the selected entrypoint flow path before running.`,
+    };
+  }
+  for (const output of nodes.filter((node) => node.kind === "output.text")) {
+    const input = output.ports.find((port) => port.name === "Input" && port.direction === "input");
+    const dataEdge = edges.find((edge) => edge.targetPortId === input?.id);
+    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input to ${output.name}.Input before running.` };
+    const source = nodeById.get(dataEdge.sourceNodeId);
+    if (source?.kind !== "input.text") return { valid: false, message: `${output.name} currently accepts text from Text Input nodes.` };
+    const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
+    if (!value) return { valid: false, message: `Set a value on ${source.name} before running.` };
+  }
+  return { valid: true, message: "Canvas is ready to run." };
+}
+
+function isPassiveSourceNode(node: WireNode) {
+  return node.kind === "input.text" || node.kind === "input.file";
+}
+
+function nodeDefinition(node: WireNode) {
+  const inputs = node.ports.filter((port) => port.direction === "input").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
+  const outputs = node.ports.filter((port) => port.direction === "output").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
+  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
+  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
+  const description = node.kind === "trigger.start"
+    ? "Manual entrypoint. Starting the canvas emits a flow signal from this node."
+    : node.kind === "input.text"
+      ? "Runtime value source. Enter text in the Inspector, then connect Text to a compatible data input."
+      : node.kind === "input.file"
+        ? "Workspace resource source. Provide a permitted file path, then connect File to a resource input."
+        : node.kind === "control.approval"
+          ? "Pauses the graph until a human approves the incoming request."
+          : node.kind === "trigger.event"
+            ? "External event source. It can begin a named event path when the Host receives a matching event."
+            : node.kind === "task.manual"
+              ? "Manual review task. It receives connected inputs and waits for a human result; it does not call an Agent by itself."
+              : node.kind === "output.text"
+                ? "Text output. It displays a value received from a connected Text Input node in Run Output."
+              : "Agent task. This node requires an Agent Runtime capability before it can execute.";
+  return { typeLabel, icon, inputs, outputs, description };
+}
+
+function nodeKindForName(name: string) {
+  if (name === "Text Input") return "input.text";
+  if (name === "Text Output") return "output.text";
+  if (name === "File Input") return "input.file";
+  if (name === "Review sources") return "task.manual";
+  if (name === "Human Approval") return "control.approval";
+  if (name === "Event Trigger") return "trigger.event";
+  return "task.manual";
+}
+
+function nodePosition(index: number) {
+  const column = index % 3;
+  const row = Math.floor(index / 3);
+  return { x: 80 + column * 320, y: 145 + row * 145, cssLeft: `${4 + column * 32}%`, cssTop: `${24 + row * 22}%` };
+}
+
+function toRuntimeState(status?: string): RuntimeState {
+  if (status === "running" || status === "queued") return "running";
+  if (status === "waiting_input") return "waiting";
+  if (status === "succeeded") return "success";
+  if (status === "failed") return "error";
+  return "idle";
+}
+
+function aggregateState(states: RuntimeState[]): RuntimeState {
+  return (["error", "waiting", "running", "success", "idle"] as RuntimeState[]).find((state) => states.includes(state)) ?? "idle";
+}
+
+function stateLabel(state: RuntimeState) {
+  return { idle: "Ready", running: "Running", waiting: "Waiting", success: "Completed", error: "Failed" }[state];
+}
+
+function surfaceTitle(surface: Surface) {
+  return surface[0].toUpperCase() + surface.slice(1);
+}
+
+function noticeIcon(severity: Notice["severity"]) {
+  if (severity === "success") return <CheckCircle2 />;
+  if (severity === "error") return <CircleAlert />;
+  if (severity === "warning") return <TriangleAlert />;
+  return <Sparkles />;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
