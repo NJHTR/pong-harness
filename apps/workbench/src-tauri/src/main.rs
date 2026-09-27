@@ -42,11 +42,12 @@ fn validate_project_name(name: &str) -> Result<&str, String> {
     Ok(clean_name)
 }
 
-#[tauri::command]
-fn create_project_directory(parent_path: String, name: String) -> Result<String, String> {
-    let parent = PathBuf::from(parent_path.trim());
-    let clean_name = validate_project_name(&name)?;
-    if !parent.is_absolute() || !parent.is_dir() {
+fn create_project_directory_at(parent: PathBuf, name: &str) -> Result<String, String> {
+    let clean_name = validate_project_name(name)?;
+    if !parent.is_absolute() {
+        return Err("The selected parent folder must be an absolute path".to_string());
+    }
+    if !parent.is_dir() {
         return Err("The selected parent folder does not exist".to_string());
     }
     let parent = fs::canonicalize(parent)
@@ -57,6 +58,27 @@ fn create_project_directory(parent_path: String, name: String) -> Result<String,
     fs::canonicalize(project)
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(|error| format!("Unable to resolve new project folder: {error}"))
+}
+
+#[tauri::command]
+fn create_project_directory(
+    app: tauri::AppHandle,
+    parent_path: String,
+    name: String,
+) -> Result<String, String> {
+    let parent = if parent_path.trim().is_empty() {
+        let default_parent = app
+            .path()
+            .document_dir()
+            .map_err(|error| format!("Unable to locate the Documents folder: {error}"))?
+            .join("Seekwd Projects");
+        fs::create_dir_all(&default_parent)
+            .map_err(|error| format!("Unable to create the default projects folder: {error}"))?;
+        default_parent
+    } else {
+        PathBuf::from(parent_path.trim())
+    };
+    create_project_directory_at(parent, &name)
 }
 
 fn host_token() -> String {
@@ -192,20 +214,10 @@ mod tests {
         let parent = std::env::temp_dir().join(format!("seekwd-project-{}", Uuid::new_v4()));
         fs::create_dir_all(&parent).unwrap();
 
-        let created = create_project_directory(
-            parent.to_string_lossy().into_owned(),
-            "New Project".to_string(),
-        )
-        .unwrap();
+        let created = create_project_directory_at(parent.clone(), "New Project").unwrap();
         let created_path = PathBuf::from(created);
         assert!(created_path.is_dir());
-        assert!(
-            create_project_directory(
-                parent.to_string_lossy().into_owned(),
-                "New Project".to_string()
-            )
-            .is_err()
-        );
+        assert!(create_project_directory_at(parent.clone(), "New Project").is_err());
 
         fs::remove_dir_all(parent).unwrap();
     }
