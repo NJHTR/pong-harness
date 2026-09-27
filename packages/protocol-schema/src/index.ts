@@ -33,6 +33,42 @@ export {
   type PortValueType,
 } from "./graph";
 
+export type {
+  CanvasDraft,
+  CanvasEntrypoint,
+  CanvasIdentity,
+  CanvasKind as RuntimeCanvasKind,
+  CanvasLifecycle,
+  CanvasRelease,
+  CanvasRevision as RuntimeCanvasRevision,
+  DefinitionRef,
+  Edge,
+  EdgeKind,
+  EntrypointKind as RuntimeEntrypointKind,
+  GraphDocument,
+  GraphPort as RuntimeGraphPort,
+  GraphValidation,
+  MappingExpression,
+  NodeCategory as RuntimeNodeCategory,
+  NodeInstance,
+  NodeRunStatus,
+  PortCardinality as RuntimePortCardinality,
+  PortDirection as RuntimePortDirection,
+  PortKind,
+  PortValueType as RuntimePortValueType,
+  Position,
+  ReleaseChannel,
+  ReleaseLifecycle,
+  RevisionValidationStatus,
+  Run as RuntimeRun,
+  RunSnapshot,
+  RunStatus as RuntimeRunStatus,
+  SemVer,
+  Timestamp,
+  TriggerBinding,
+} from "./runtime";
+export { validateGraph as validateRuntimeGraph, validateConnection as validateRuntimeConnection } from "./runtime";
+
 import type { CanvasPort, SaveRevisionRequest, StartRunRequest, SubmitRunInputRequest, UpdateNodeRequest } from "./host-wire.generated";
 
 export type Id = string;
