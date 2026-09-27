@@ -1,4 +1,4 @@
-import type { Canvas, CanvasEdge, CanvasNode, CanvasPort, CanvasRevision, CreateCanvasInput, CreateEdgeInput, CreateNodeInput, CreatePortInput, CreateWorkspaceInput, HostError, HostEventBatch, HostSnapshot, Id, Notification, Run, StartRunInput, SubmitRunInput, UpdateNodeInput, Workspace } from "@seekwd/protocol-schema";
+import { validateRuntimeConnection, type Canvas, type CanvasEdge, type CanvasNode, type CanvasPort, type CanvasRevision, type CreateCanvasInput, type CreateEdgeInput, type CreateNodeInput, type CreatePortInput, type CreateWorkspaceInput, type HostError, type HostEventBatch, type HostSnapshot, type Id, type Notification, type Run, type RuntimeGraphPort, type StartRunInput, type SubmitRunInput, type UpdateNodeInput, type Workspace } from "@seekwd/protocol-schema";
 
 export interface HostClient {
   snapshot(): Promise<HostSnapshot>;
@@ -26,6 +26,16 @@ const key = "seekwd.vertical-slice.v1";
 const uid = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const now = () => new Date().toISOString();
 const port = (nodeId: string, name: string, direction: CanvasPort["direction"], kind: CanvasPort["kind"]): CanvasPort => ({ id: uid("port"), nodeId, name, direction, kind });
+const runtimePort = (value: CanvasPort): RuntimeGraphPort => ({
+  portId: value.id,
+  nodeId: value.nodeId,
+  name: value.name,
+  direction: value.direction,
+  kind: value.kind === "flow" ? "control" : value.kind === "resource" ? "data" : value.kind,
+  valueType: value.kind === "resource" ? "artifact" : value.kind === "data" ? "any" : value.kind === "event" ? "event" : "any",
+  required: value.direction === "input",
+  cardinality: "one",
+});
 const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "trigger.start") return [port(nodeId, "Start", "output", "flow"), port(nodeId, "Event", "output", "event")];
   if (kind === "input.text") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Text", "output", "data"), port(nodeId, "Complete", "output", "flow")];
@@ -108,7 +118,45 @@ export function createLocalHostClient(): HostClient {
     async updateNode(input) { const node = state.nodes.find((candidate) => candidate.id === input.nodeId); if (!node) throw new Error("Node not found"); if (input.name !== undefined) { const name = input.name.trim(); if (!name) throw new Error("Node name is required"); node.name = name; } if (input.config !== undefined) node.config = { ...(node.config ?? {}), ...input.config }; const item = canvas(node.canvasId); if (item) { item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); } commit(); return structuredClone(node); },
     async deleteNode(nodeId) { const node = state.nodes.find((candidate) => candidate.id === nodeId); if (!node) throw new Error("Node not found"); const item = canvas(node.canvasId); if (!item) throw new Error("Canvas not found"); if (item.status === "running" || item.status === "waiting_input") throw new Error("Cannot delete a node while this canvas has an active run."); state.edges = state.edges.filter((edge) => edge.sourceNodeId !== nodeId && edge.targetNodeId !== nodeId); state.nodes = state.nodes.filter((candidate) => candidate.id !== nodeId); if (item.defaultEntrypointNodeId === nodeId) item.defaultEntrypointNodeId = null; item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); commit(); },
     async createPort(input) { const node = state.nodes.find((candidate) => candidate.id === input.nodeId); if (!node) throw new Error("Node not found"); const port = { id: uid("port"), nodeId: node.id, name: input.name.trim(), direction: input.direction, kind: input.kind }; if (!port.name) throw new Error("Port name is required"); if (node.ports.some((candidate) => candidate.name === port.name)) throw new Error("A port with this name already exists"); node.ports.push(port); const item = canvas(node.canvasId); if (item) { item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); } commit(); return structuredClone(port); },
-    async createEdge(input) { const item = canvas(input.canvasId); if (!item) throw new Error("Canvas not found"); if (input.sourceNodeId === input.targetNodeId) throw new Error("A node cannot connect to itself"); const source = state.nodes.find((node) => node.id === input.sourceNodeId && node.canvasId === item.id); const target = state.nodes.find((node) => node.id === input.targetNodeId && node.canvasId === item.id); const sourcePort = source?.ports.find((port) => port.id === input.sourcePortId); const targetPort = target?.ports.find((port) => port.id === input.targetPortId); if (!source || !target || !sourcePort || !targetPort || sourcePort.direction !== "output" || targetPort.direction !== "input" || sourcePort.kind !== targetPort.kind || sourcePort.kind !== input.kind) throw new Error("Edges must connect compatible ports"); if (state.edges.some((edge) => edge.canvasId === item.id && edge.sourcePortId === input.sourcePortId && edge.targetPortId === input.targetPortId)) throw new Error("This edge already exists"); const edge: CanvasEdge = { id: uid("edge"), canvasId: item.id, sourceNodeId: input.sourceNodeId, sourcePortId: input.sourcePortId, targetNodeId: input.targetNodeId, targetPortId: input.targetPortId, kind: input.kind }; item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); state.edges.push(edge); commit(); return structuredClone(edge); },
+    async createEdge(input) {
+      const item = canvas(input.canvasId);
+      if (!item) throw new Error("Canvas not found");
+      const source = state.nodes.find((node) => node.id === input.sourceNodeId && node.canvasId === item.id);
+      const target = state.nodes.find((node) => node.id === input.targetNodeId && node.canvasId === item.id);
+      const sourcePort = source?.ports.find((candidate) => candidate.id === input.sourcePortId);
+      const targetPort = target?.ports.find((candidate) => candidate.id === input.targetPortId);
+      if (!source || !target || !sourcePort || !targetPort) throw new Error("Connection endpoint not found");
+      if (sourcePort.kind !== input.kind || targetPort.kind !== input.kind) throw new Error("Connection kind does not match the selected ports");
+      const targetHasConnection = state.edges.some((edge) => edge.canvasId === item.id && edge.targetPortId === targetPort.id);
+      const validation = validateRuntimeConnection(
+        runtimePort(sourcePort),
+        runtimePort(targetPort),
+        source.canvasId,
+        target.canvasId,
+        targetHasConnection,
+      );
+      if (!validation.valid) {
+        const messages: Record<NonNullable<typeof validation.reason>, string> = {
+          same_port: "A port cannot connect to itself.",
+          same_direction: "Connections must run from an output port to an input port.",
+          cross_canvas: "Connections must stay inside one canvas.",
+          kind_mismatch: "The two ports use different connection kinds.",
+          value_type_mismatch: "The source value type is not compatible with the target input.",
+          input_already_connected: "This input already has a connection.",
+        };
+        throw new Error(messages[validation.reason ?? "kind_mismatch"]);
+      }
+      if (state.edges.some((edge) => edge.canvasId === item.id && edge.sourcePortId === input.sourcePortId && edge.targetPortId === input.targetPortId)) {
+        throw new Error("This connection already exists");
+      }
+      const edge: CanvasEdge = { id: uid("edge"), canvasId: item.id, sourceNodeId: input.sourceNodeId, sourcePortId: input.sourcePortId, targetNodeId: input.targetNodeId, targetPortId: input.targetPortId, kind: input.kind };
+      item.draftRevision += 1;
+      item.draftDirty = true;
+      item.updatedAt = now();
+      state.edges.push(edge);
+      commit();
+      return structuredClone(edge);
+    },
     async deleteEdge(edgeId) { const edge = state.edges.find((candidate) => candidate.id === edgeId); if (!edge) throw new Error("Connection not found"); const item = canvas(edge.canvasId); if (!item) throw new Error("Canvas not found"); if (item.status === "running" || item.status === "waiting_input") throw new Error("Cannot change connections while this canvas has an active run."); state.edges = state.edges.filter((candidate) => candidate.id !== edgeId); item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); commit(); },
     async renameCanvas(id, name) { const item = canvas(id); if (!item) throw new Error("Canvas not found"); item.name = name.trim(); item.updatedAt = now(); commit(); return structuredClone(item); },
     async deleteCanvas(id) { const item = canvas(id); if (!item) throw new Error("Canvas not found"); if (item.status === "running" || item.status === "waiting_input" || state.runs.some((run) => run.canvasId === id && (run.status === "running" || run.status === "waiting_input" || run.status === "queued"))) throw new Error("Cannot delete a canvas while it has an active run."); state.canvases = state.canvases.filter((candidate) => candidate.id !== id); state.nodes = state.nodes.filter((candidate) => candidate.canvasId !== id); state.edges = state.edges.filter((candidate) => candidate.canvasId !== id); state.revisions = state.revisions.filter((candidate) => candidate.canvasId !== id); state.runs = state.runs.filter((candidate) => candidate.canvasId !== id); state.notifications = state.notifications.filter((candidate) => candidate.canvasId !== id); commit(); },
