@@ -72,8 +72,14 @@ fn create_project_directory(
             .document_dir()
             .map_err(|error| format!("Unable to locate the Documents folder: {error}"))?
             .join("Seekwd Projects");
-        fs::create_dir_all(&default_parent)
-            .map_err(|error| format!("Unable to create the default projects folder: {error}"))?;
+        if !default_parent.exists() {
+            fs::create_dir_all(&default_parent).map_err(|error| {
+                format!(
+                    "Unable to create the default projects folder at {}: {error}",
+                    default_parent.display()
+                )
+            })?;
+        }
         default_parent
     } else {
         PathBuf::from(parent_path.trim())
