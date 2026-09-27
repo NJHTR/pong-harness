@@ -552,6 +552,7 @@ function App() {
       const created = await addWorkspace(request.name, path);
       if (created) {
         setWorkspaceCreateConfirmation(undefined);
+        setWorkspaceDialogOpen(false);
         setNewWorkspaceName("");
         setWorkspaceParentPath("");
       } else {
