@@ -100,6 +100,7 @@ interface SettingsState {
   notifyFailure: boolean;
   allowBackgroundRuns: boolean;
   confirmDestructive: boolean;
+  defaultProjectParent: string;
 }
 
 interface GraphValidation {
@@ -162,6 +163,7 @@ function App() {
     notifyFailure: true,
     allowBackgroundRuns: false,
     confirmDestructive: true,
+    defaultProjectParent: "",
   });
 
   const activeWorkspace = snapshot.workspaces.find((item) => item.id === workspaceId) ?? snapshot.workspaces[0];
@@ -215,6 +217,26 @@ function App() {
   const showNotice = (title: string, message: string, severity: Notice["severity"] = "info") => {
     setNotices((current) => [...current, { id: `${Date.now()}-${Math.random()}`, title, message, severity }]);
   };
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("seekwd.settings");
+      if (stored) {
+        const parsed = JSON.parse(stored) as Partial<SettingsState>;
+        setSettings((current) => ({ ...current, ...parsed }));
+      }
+    } catch {
+      // Ignore unavailable or invalid local preferences.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("seekwd.settings", JSON.stringify(settings));
+    } catch {
+      // Preferences remain usable for the current session.
+    }
+  }, [settings]);
 
   const reportError = (error: unknown, fallback: string) => {
     const message = typeof error === "string"
@@ -516,7 +538,7 @@ function App() {
   const createWorkspace = async () => {
     const name = newWorkspaceName.trim();
     if (!name) return;
-    setWorkspaceCreateConfirmation({ name, parentPath: workspaceParentPath });
+    setWorkspaceCreateConfirmation({ name, parentPath: workspaceParentPath || settings.defaultProjectParent });
   };
 
   const confirmCreateWorkspace = async () => {
@@ -939,7 +961,7 @@ function App() {
         }
         className="workspace-dialog"
       >
-        <p className="workspace-trust-copy">Location: {workspaceCreateConfirmation?.parentPath || "Default local Seekwd Projects folder"}</p>
+        <p className="workspace-trust-copy">Location: {workspaceCreateConfirmation?.parentPath || "Default: user home folder / SeekwdProjects"}</p>
       </Dialog>
 
       <Dialog
@@ -1579,8 +1601,8 @@ function RunPanel({ run, canvas, nodes, value, onValueChange, onSubmit }: { run?
   );
 }
 
-function SurfacePage({ surface, workspaceName, settings, onSettingsChange, onNotice }: { surface: Exclude<Surface, "canvas">; workspaceName: string; settings: SettingsState; onSettingsChange: (key: keyof SettingsState, value: boolean) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
-  if (surface === "settings") return <SettingsPage settings={settings} onChange={onSettingsChange} />;
+function SurfacePage({ surface, workspaceName, settings, onSettingsChange, onNotice }: { surface: Exclude<Surface, "canvas">; workspaceName: string; settings: SettingsState; onSettingsChange: (key: keyof SettingsState, value: SettingsState[keyof SettingsState]) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+  if (surface === "settings") return <SettingsPage settings={settings} onChange={onSettingsChange} onDefaultProjectParentChange={(path) => onSettingsChange("defaultProjectParent", path)} onNotice={onNotice} />;
   const config: Record<Exclude<Surface, "canvas" | "settings">, { eyebrow: string; title: string; description: string; icon: ReactNode }> = {
     automations: { eyebrow: "Workspace automation", title: "Automations", description: "Schedule canvas entrypoints and keep recurring work visible.", icon: <CalendarClock /> },
     extensions: { eyebrow: "Workspace capabilities", title: "Extensions", description: "Connect approved capabilities to the active workspace.", icon: <Blocks /> },
@@ -1600,8 +1622,19 @@ function SurfaceContent({ surface, onNotice }: { surface: Exclude<Surface, "canv
   return <div className="agent-list"><div className="agent-row"><div className="agent-avatar"><Bot /></div><div><strong>Agent Runtime</strong><span>Natural-language graph changes are not connected in this MVP.</span><small>Use node, port, edge, revision and Run actions directly.</small></div><Switch label="" aria-label="Agent runtime unavailable" disabled /></div></div>;
 }
 
-function SettingsPage({ settings, onChange }: { settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void }) {
-  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection></div></div></div>;
+function SettingsPage({ settings, onChange, onDefaultProjectParentChange, onNotice }: { settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void; onDefaultProjectParentChange: (path: string) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+  const chooseDefaultProjectParent = async () => {
+    try {
+      const path = await open({ directory: true, multiple: false, title: "Choose default project folder" });
+      if (typeof path === "string") {
+        onDefaultProjectParentChange(path);
+        onNotice("Default project folder updated", path, "success");
+      }
+    } catch (error) {
+      onNotice("Unable to choose project folder", typeof error === "string" ? error : "The folder picker could not be opened.", "error");
+    }
+  };
+  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><div className="settings-path-row"><div><strong>Default project folder</strong><p>{settings.defaultProjectParent || "User home folder / SeekwdProjects"}</p><small>New projects use this folder unless you choose another location.</small></div><div className="settings-path-actions"><Button size="small" leadingIcon={<FolderOpen />} onClick={() => void chooseDefaultProjectParent()}>Choose folder</Button><Button size="small" onClick={() => onDefaultProjectParentChange("")} disabled={!settings.defaultProjectParent}>Reset</Button></div></div><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection></div></div></div>;
 }
 
 function SurfaceHeader({ eyebrow, title, description, icon, action }: { eyebrow: string; title: string; description: string; icon: ReactNode; action?: ReactNode }) {
