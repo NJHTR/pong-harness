@@ -122,6 +122,17 @@ button, input, textarea { font-family: inherit; }
 .new-workspace-form .sk-segmented { width: 100%; }
 .new-workspace-form .sk-segmented button { flex: 1; justify-content: center; }
 .sidebar-footer { margin-top: 0; padding-top: 8px; border-top: 1px solid var(--sk-divider); }
+.workspace-dialog-form { display: grid; gap: 12px; }
+.workspace-folder-picker { width: 100%; min-height: 58px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--sk-divider); border-radius: 8px; color: var(--sk-text-primary); background: var(--sk-bg-panel); text-align: left; cursor: pointer; }
+.workspace-folder-picker:hover { border-color: var(--sk-accent); background: color-mix(in srgb, var(--sk-accent) 5%, var(--sk-bg-panel)); }
+.workspace-folder-picker > svg:first-child { width: 18px; height: 18px; flex: 0 0 18px; color: var(--sk-accent); }
+.workspace-folder-picker > svg:last-child { width: 14px; height: 14px; margin-left: auto; color: var(--sk-text-tertiary); }
+.workspace-folder-picker span { min-width: 0; display: grid; gap: 4px; }
+.workspace-folder-picker strong, .workspace-folder-picker small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-folder-picker strong { font-size: 11px; }
+.workspace-folder-picker small, .workspace-trust-copy { color: var(--sk-text-secondary); font-size: 10px; line-height: 1.45; }
+.workspace-folder-picker--large { min-height: 90px; }
+.workspace-trust-copy { margin: 0; }
 
 .canvas-preview { position: absolute; inset: 0; overflow: hidden; background-image: radial-gradient(circle, var(--sk-canvas-grid) 1px, transparent 1px); background-size: 18px 18px; }
 .canvas-tabbar { position: absolute; z-index: 5; inset: 0 0 auto; height: 34px; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; border-bottom: 1px solid var(--sk-divider); background: var(--sk-bg-panel); }

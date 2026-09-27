@@ -50,6 +50,7 @@ import { createHttpHostClient, createLocalHostClient } from "@seekwd/client";
 import type { Canvas, CanvasEdge, CanvasNode as WireNode, HostSnapshot, Run, Workspace } from "@seekwd/protocol-schema";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Button,
   AutoGrowTextArea,
@@ -62,6 +63,7 @@ import {
   PanelHeader,
   PropertyRow,
   SidebarItem,
+  SegmentedControl,
   StatusBadge,
   Switch,
   TextField,
@@ -143,6 +145,11 @@ function App() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget>();
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>();
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [workspaceMode, setWorkspaceMode] = useState<"create" | "open">("create");
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [workspaceParentPath, setWorkspaceParentPath] = useState("");
+  const [pendingWorkspace, setPendingWorkspace] = useState<{ name: string; path: string }>();
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
   const [portDirection, setPortDirection] = useState<"input" | "output">("input");
@@ -462,24 +469,60 @@ function App() {
 
   const chooseWorkspaceFolder = async () => {
     try {
-      const path = await open({ directory: true, multiple: false, title: "Choose Seekwd workspace folder" });
+      const path = await open({ directory: true, multiple: false, title: workspaceMode === "create" ? "Choose parent folder" : "Open Seekwd project folder" });
       if (typeof path !== "string") return;
       const name = path.split(/[\\/]/).filter(Boolean).pop() ?? "Workspace";
+      if (workspaceMode === "create") {
+        setWorkspaceParentPath(path);
+        return;
+      }
+      setWorkspaceDialogOpen(false);
+      setPendingWorkspace({ name, path });
+    } catch (error) {
+      reportError(error, "Unable to choose workspace folder");
+    }
+  };
+
+  const addWorkspace = async (name: string, path: string): Promise<boolean> => {
+    try {
       const existing = snapshot.workspaces.find((workspace) =>
         workspace.path.replace(/[\\/]+$/, "").toLocaleLowerCase() === path.replace(/[\\/]+$/, "").toLocaleLowerCase(),
       );
       if (existing) {
         selectWorkspace(existing);
         showNotice("Workspace already added", `${existing.name} is already in your workspace list.`, "info");
-        return;
+        return true;
       }
       const workspace = await client.createWorkspace({ name, path });
       setWorkspaceId(workspace.id);
       setCanvasId(undefined);
       setSurface("canvas");
       showNotice("Workspace added", `${workspace.name} now points to ${path}.`, "success");
+      return true;
     } catch (error) {
       reportError(error, "Unable to create workspace");
+      return false;
+    }
+  };
+
+  const createWorkspace = async () => {
+    const name = newWorkspaceName.trim();
+    if (!name || !workspaceParentPath) return;
+    try {
+      const path = await invoke<string>("create_project_directory", {
+        parentPath: workspaceParentPath,
+        name,
+      });
+      const created = await addWorkspace(name, path);
+      if (created) {
+        setWorkspaceDialogOpen(false);
+        setNewWorkspaceName("");
+        setWorkspaceParentPath("");
+      } else {
+        showNotice("Folder created", "The project folder exists, but Seekwd could not add it. Use Open Project to add it later.", "warning");
+      }
+    } catch (error) {
+      reportError(error, "Unable to create project folder");
     }
   };
 
@@ -724,7 +767,7 @@ function App() {
             onToggleWorkspace={(id) => setExpandedWorkspaces((items) => ({ ...items, [id]: !items[id] }))}
             onToggleCanvas={(id) => setExpandedCanvases((items) => ({ ...items, [id]: !items[id] }))}
             onNavigate={setSurface}
-            onNewWorkspace={() => void chooseWorkspaceFolder()}
+            onNewWorkspace={() => setWorkspaceDialogOpen(true)}
             onAddCanvas={createCanvas}
             onSelectWorkspace={selectWorkspace}
             onSelectCanvas={selectCanvas}
@@ -807,6 +850,66 @@ function App() {
           </Notification>)}
         </div>
       ) : null}
+
+      <Dialog
+        open={workspaceDialogOpen}
+        title="项目"
+        description="选择创建一个新项目，或打开已有项目文件夹。项目文件夹不会被 Seekwd 自动删除。"
+        onClose={() => setWorkspaceDialogOpen(false)}
+        footer={
+          <>
+            <Button onClick={() => setWorkspaceDialogOpen(false)}>取消</Button>
+            {workspaceMode === "create"
+              ? <Button variant="primary" leadingIcon={<FolderPlus />} onClick={() => void createWorkspace()} disabled={!newWorkspaceName.trim() || !workspaceParentPath}>创建项目</Button>
+              : null}
+          </>
+        }
+      >
+        <SegmentedControl
+          label="Project action"
+          value={workspaceMode}
+          onChange={setWorkspaceMode}
+          options={[
+            { value: "create", label: "创建项目", icon: <FolderPlus /> },
+            { value: "open", label: "打开项目", icon: <FolderOpen /> },
+          ]}
+        />
+        {workspaceMode === "create" ? (
+          <div className="workspace-dialog-form">
+            <TextField label="项目名称" autoFocus value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="例如：惠州项目后端" />
+            <button type="button" className="workspace-folder-picker" onClick={() => void chooseWorkspaceFolder()}>
+              <FolderOpen aria-hidden="true" />
+              <span><strong>{workspaceParentPath || "选择项目所在的父文件夹"}</strong><small>创建后会自动建立同名项目文件夹</small></span>
+              <ChevronRight aria-hidden="true" />
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="workspace-folder-picker workspace-folder-picker--large" onClick={() => void chooseWorkspaceFolder()}>
+            <FolderOpen aria-hidden="true" />
+            <span><strong>选择已有项目文件夹</strong><small>打开后会将它加入左侧工作区列表</small></span>
+            <ChevronRight aria-hidden="true" />
+          </button>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={Boolean(pendingWorkspace)}
+        title="信任此项目？"
+        description={pendingWorkspace?.path}
+        onClose={() => setPendingWorkspace(undefined)}
+        footer={
+          <>
+            <Button onClick={() => setPendingWorkspace(undefined)}>取消</Button>
+            <Button variant="primary" onClick={() => {
+              const item = pendingWorkspace;
+              setPendingWorkspace(undefined);
+              if (item) void addWorkspace(item.name, item.path);
+            }}>信任并打开</Button>
+          </>
+        }
+      >
+        <p className="workspace-trust-copy">Seekwd 可以读取和修改此项目中的文件。只有在你信任该文件夹内容时才继续。</p>
+      </Dialog>
 
       <Dialog
         open={Boolean(renameTarget)}

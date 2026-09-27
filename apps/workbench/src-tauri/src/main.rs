@@ -14,6 +14,51 @@ const HOST_URL: &str = "http://127.0.0.1:4317";
 
 struct HostProcess(Mutex<Option<Child>>);
 
+fn validate_project_name(name: &str) -> Result<&str, String> {
+    let clean_name = name.trim();
+    let reserved_stem = clean_name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved_windows_name = matches!(reserved_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            reserved_stem.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            })
+        });
+    if clean_name.is_empty()
+        || clean_name == "."
+        || clean_name == ".."
+        || clean_name.ends_with([' ', '.'])
+        || clean_name.contains(['\\', '/', ':'])
+        || clean_name
+            .chars()
+            .any(|character| character.is_control() || "<>\"|?*".contains(character))
+        || reserved_windows_name
+    {
+        return Err("Enter a valid project name that can be used as a folder name".to_string());
+    }
+    Ok(clean_name)
+}
+
+#[tauri::command]
+fn create_project_directory(parent_path: String, name: String) -> Result<String, String> {
+    let parent = PathBuf::from(parent_path.trim());
+    let clean_name = validate_project_name(&name)?;
+    if !parent.is_absolute() || !parent.is_dir() {
+        return Err("The selected parent folder does not exist".to_string());
+    }
+    let parent = fs::canonicalize(parent)
+        .map_err(|error| format!("Unable to resolve parent folder: {error}"))?;
+    let project = parent.join(clean_name);
+    fs::create_dir(&project)
+        .map_err(|error| format!("Unable to create project folder: {error}"))?;
+    fs::canonicalize(project)
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| format!("Unable to resolve new project folder: {error}"))
+}
+
 fn host_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
@@ -81,6 +126,7 @@ fn spawn_host(app: &tauri::AppHandle, token: &str) -> io::Result<Child> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![create_project_directory])
         .setup(|app| {
             let token = host_token();
             let child = spawn_host(&app.handle(), &token)
@@ -115,4 +161,52 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_names_must_be_single_valid_folder_names() {
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "one\\two",
+            "name.",
+            "bad:name",
+            "CON",
+        ] {
+            assert!(
+                validate_project_name(invalid).is_err(),
+                "{invalid:?} should be rejected"
+            );
+        }
+        assert_eq!(validate_project_name("  backend  ").unwrap(), "backend");
+    }
+
+    #[test]
+    fn project_directory_creation_does_not_overwrite_existing_folders() {
+        let parent = std::env::temp_dir().join(format!("seekwd-project-{}", Uuid::new_v4()));
+        fs::create_dir_all(&parent).unwrap();
+
+        let created = create_project_directory(
+            parent.to_string_lossy().into_owned(),
+            "New Project".to_string(),
+        )
+        .unwrap();
+        let created_path = PathBuf::from(created);
+        assert!(created_path.is_dir());
+        assert!(
+            create_project_directory(
+                parent.to_string_lossy().into_owned(),
+                "New Project".to_string()
+            )
+            .is_err()
+        );
+
+        fs::remove_dir_all(parent).unwrap();
+    }
 }
