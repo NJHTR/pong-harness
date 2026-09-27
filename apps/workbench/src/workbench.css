@@ -123,6 +123,7 @@ button, input, textarea { font-family: inherit; }
 .new-workspace-form .sk-segmented button { flex: 1; justify-content: center; }
 .sidebar-footer { margin-top: 0; padding-top: 8px; border-top: 1px solid var(--sk-divider); }
 .workspace-dialog-form { display: grid; gap: 12px; }
+.workspace-dialog .sk-dialog__body > .sk-segmented { margin-bottom: 14px; }
 .workspace-dialog > footer { min-height: 0; padding: 7px 12px; }
 .workspace-dialog > footer .sk-button { min-height: 25px; padding-top: 3px; padding-bottom: 3px; }
 .workspace-folder-picker { width: 100%; min-height: 58px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--sk-divider); border-radius: 8px; color: var(--sk-text-primary); background: var(--sk-bg-panel); text-align: left; cursor: pointer; }
