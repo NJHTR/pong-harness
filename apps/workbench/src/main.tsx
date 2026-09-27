@@ -152,6 +152,7 @@ function App() {
   const [workspaceParentPath, setWorkspaceParentPath] = useState("");
   const [workspaceCreateConfirmation, setWorkspaceCreateConfirmation] = useState<{ name: string; parentPath: string }>();
   const [pendingWorkspace, setPendingWorkspace] = useState<{ name: string; path: string }>();
+  const [composerScopeEnabled, setComposerScopeEnabled] = useState(true);
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
   const [portDirection, setPortDirection] = useState<"input" | "output">("input");
@@ -605,9 +606,20 @@ function App() {
     }
   };
 
-  const runCanvas = async () => {
+  const runCanvas = async (composerValue?: string) => {
     if (!activeCanvas) return;
+    const normalizedComposerValue = composerValue?.trim();
+    const composerInputNode = normalizedComposerValue
+      ? canvasNodes.find((node) => node.kind === "input.text")
+      : undefined;
+    if (normalizedComposerValue && !composerInputNode) {
+      showNotice("Canvas input is not connected", "Add a Text Input node and connect it to a compatible data input before sending a value.", "warning");
+      return;
+    }
     try {
+      if (normalizedComposerValue && composerInputNode) {
+        await client.updateNode({ nodeId: composerInputNode.id, config: { inputValue: normalizedComposerValue } });
+      }
       await flushAllNodeConfigs();
     } catch (error) {
       reportError(error, "Unable to save node inputs");
@@ -617,14 +629,23 @@ function App() {
       showNotice("Canvas is not directly runnable", "This canvas has no manual entrypoint. Select a node and choose Set as canvas entry node before running.", "warning");
       return;
     }
-    if (!graphValidation.valid) {
-      showNotice("Canvas is not ready", graphValidation.message, "warning");
+    const validationNodes = normalizedComposerValue && composerInputNode
+      ? canvasNodes.map((node) => node.id === composerInputNode.id
+        ? { ...node, config: { ...(node.config ?? {}), inputValue: normalizedComposerValue } }
+        : node)
+      : canvasNodes;
+    const validation = validateCanvasGraphForUi(activeCanvas, validationNodes, canvasEdges);
+    if (!validation.valid) {
+      showNotice("Canvas is not ready", validation.message, "warning");
       return;
     }
     try {
       let revision = activeCanvas.revision;
-      if (activeCanvas.draftDirty) {
-        const saved = await client.saveRevision(activeCanvas.id, activeCanvas.draftRevision);
+      if (activeCanvas.draftDirty || Boolean(normalizedComposerValue)) {
+        const saved = await client.saveRevision(
+          activeCanvas.id,
+          normalizedComposerValue ? undefined : activeCanvas.draftRevision,
+        );
         revision = saved.revision;
       }
       await client.startRun({
@@ -639,6 +660,25 @@ function App() {
     } catch (error) {
       reportError(error, "Unable to start run");
     }
+  };
+
+  const submitComposerRequest = async (value: string) => {
+    const normalizedValue = value.trim();
+    if (!normalizedValue) return;
+    if (activeRun?.status === "waiting_input") {
+      try {
+        await client.submitRunInput({ runId: activeRun.id, value: normalizedValue });
+        setRunInputValue("");
+      } catch (error) {
+        reportError(error, "Unable to submit node result");
+      }
+      return;
+    }
+    if (activeRun?.status === "running" || activeRun?.status === "queued") {
+      showNotice("Run already active", "Wait for the current canvas run to finish before sending another value.", "warning");
+      return;
+    }
+    await runCanvas(normalizedValue);
   };
 
   const submitRunInput = async () => {
@@ -826,6 +866,9 @@ function App() {
         {surface === "canvas" ? (
           <CanvasSurface
             workspaceName={activeWorkspace?.name ?? "Workspace"}
+            workspaces={snapshot.workspaces}
+            workspaceId={activeWorkspace?.id}
+            scopeEnabled={composerScopeEnabled}
             canvas={activeCanvas}
             openCanvases={snapshot.canvases.filter((item) => openCanvasIds.includes(item.id))}
             nodes={canvasNodes}
@@ -862,6 +905,17 @@ function App() {
             onToggleRunHistory={() => setRunHistoryOpen((open) => !open)}
             onCloseRunHistory={() => setRunHistoryOpen(false)}
             onRun={runCanvas}
+            onComposerWorkspaceChange={(workspace) => {
+              selectWorkspace(workspace);
+              setComposerScopeEnabled(true);
+            }}
+            onComposerScopeClear={() => setComposerScopeEnabled(false)}
+            onComposerScopeEnable={() => setComposerScopeEnabled(true)}
+            onComposerNewWorkspace={() => {
+              setWorkspaceMode("create");
+              setWorkspaceDialogOpen(true);
+            }}
+            onComposerSubmit={(value) => void submitComposerRequest(value)}
             onToggleRunPanel={() => setRunPanelOpen((open) => !open)}
             onAddCanvas={createCanvas}
             onSaveRevision={saveRevision}
@@ -1234,11 +1288,14 @@ function RuntimeIcon({ state }: { state: RuntimeState }) {
 }
 
 function CanvasSurface({
-  workspaceName, canvas, openCanvases, nodes, edges, selectedNodeId, selectedEdgeId, connectionSource, nodeLibraryOpen, runHistoryOpen, runs, runPanelOpen, runState, currentNodeId,
+  workspaceName, workspaces, workspaceId, scopeEnabled, canvas, openCanvases, nodes, edges, selectedNodeId, selectedEdgeId, connectionSource, nodeLibraryOpen, runHistoryOpen, runs, runPanelOpen, runState, currentNodeId,
   graphValidation, otherActiveRuns, onSelectNode, onSelectEdge, onDeleteEdge, onPortConnect, onNodeMoved, onToggleNodeLibrary, onCloseNodeLibrary, onAddNode, onToggleRunHistory, onCloseRunHistory, onRun,
-  onToggleRunPanel, onAddCanvas, onSaveRevision, onCancelConnection, onSelectCanvas, onCloseCanvas,
+  onToggleRunPanel, onAddCanvas, onSaveRevision, onCancelConnection, onSelectCanvas, onCloseCanvas, onComposerWorkspaceChange, onComposerScopeClear, onComposerScopeEnable, onComposerNewWorkspace, onComposerSubmit,
 }: {
   workspaceName: string;
+  workspaces: Workspace[];
+  workspaceId?: string;
+  scopeEnabled: boolean;
   canvas?: Canvas;
   openCanvases: Canvas[];
   nodes: WireNode[];
@@ -1271,6 +1328,11 @@ function CanvasSurface({
   onCancelConnection: () => void;
   onSelectCanvas: (canvas: Canvas) => void;
   onCloseCanvas: (canvasId: string) => void;
+  onComposerWorkspaceChange: (workspace: Workspace) => void;
+  onComposerScopeClear: () => void;
+  onComposerScopeEnable: () => void;
+  onComposerNewWorkspace: () => void;
+  onComposerSubmit: (value: string) => void;
 }) {
   const [zoom, setZoom] = useState(100);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -1464,7 +1526,17 @@ function CanvasSurface({
       {!nodes.length ? <div className="canvas-empty-hint">Add a node to start building this canvas.</div> : null}
       {nodeLibraryOpen ? <NodeLibrary onAdd={onAddNode} onClose={onCloseNodeLibrary} /> : null}
       {runHistoryOpen ? <RunHistoryPanel canvas={canvas} runs={runs} onClose={onCloseRunHistory} /> : null}
-      <AgentComposer workspaceName={workspaceName} />
+      <AgentComposer
+        workspaceName={workspaceName}
+        workspaces={workspaces}
+        workspaceId={workspaceId}
+        scopeEnabled={scopeEnabled}
+        onWorkspaceChange={onComposerWorkspaceChange}
+        onScopeClear={onComposerScopeClear}
+        onScopeEnable={onComposerScopeEnable}
+        onNewWorkspace={onComposerNewWorkspace}
+        onSubmit={onComposerSubmit}
+      />
       <div className="canvas-zoom"><button type="button" aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(50, value - 10))}>−</button><span>{zoom}%</span><button type="button" aria-label="Zoom in" onClick={() => setZoom((value) => Math.min(200, value + 10))}><Plus /></button></div>
     </div>
   );
@@ -1550,14 +1622,76 @@ function RunHistoryPanel({ canvas, runs, onClose }: { canvas: Canvas; runs: Run[
   );
 }
 
-function AgentComposer({ workspaceName }: { workspaceName: string }) {
+function AgentComposer({
+  workspaceName,
+  workspaces,
+  workspaceId,
+  scopeEnabled,
+  onWorkspaceChange,
+  onScopeClear,
+  onScopeEnable,
+  onNewWorkspace,
+  onSubmit,
+}: {
+  workspaceName: string;
+  workspaces: Workspace[];
+  workspaceId?: string;
+  scopeEnabled: boolean;
+  onWorkspaceChange: (workspace: Workspace) => void;
+  onScopeClear: () => void;
+  onScopeEnable: () => void;
+  onNewWorkspace: () => void;
+  onSubmit: (value: string) => void;
+}) {
   const [value, setValue] = useState("");
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const visibleWorkspaces = workspaces.filter((workspace) => workspace.name.toLowerCase().includes(query.toLowerCase()));
+  const submit = () => {
+    const normalizedValue = value.trim();
+    if (!normalizedValue) return;
+    setValue("");
+    setScopePickerOpen(false);
+    onSubmit(normalizedValue);
+  };
   return (
     <section className="agent-composer" aria-label="Agent conversation">
-      <div className="agent-composer__scope-row"><div className="agent-composer__scope"><button type="button" className="agent-composer__scope-trigger"><FolderOpen /><span>{workspaceName}</span></button><IconButton label="Remove workspace scope" size="small"><X /></IconButton></div></div>
+      <div className="agent-composer__scope-row">
+        {scopeEnabled ? (
+          <div className="agent-composer__scope">
+            <button type="button" className="agent-composer__scope-trigger" onClick={() => setScopePickerOpen((open) => !open)} aria-expanded={scopePickerOpen}>
+              <FolderOpen /><span>{workspaceName}</span>
+            </button>
+            <IconButton label="Remove workspace scope" size="small" className="agent-composer__scope-remove" onClick={() => { onScopeClear(); setScopePickerOpen(false); }}><X /></IconButton>
+          </div>
+        ) : (
+          <button type="button" className="agent-composer__scope-empty" onClick={() => setScopePickerOpen((open) => !open)} aria-expanded={scopePickerOpen}><FolderPlus /><span>Choose workspace</span></button>
+        )}
+        {scopePickerOpen ? (
+          <div className="agent-composer__scope-picker" role="dialog" aria-label="Choose workspace">
+            <TextField aria-label="Search workspaces" leadingIcon={<Search />} placeholder="Search workspaces" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <div className="agent-composer__scope-list">
+              {visibleWorkspaces.map((workspace) => <button type="button" key={workspace.id} className={workspace.id === workspaceId ? "is-selected" : ""} onClick={() => { onWorkspaceChange(workspace); onScopeEnable(); setScopePickerOpen(false); setQuery(""); }}><Folder /><span>{workspace.name}</span></button>)}
+              {!visibleWorkspaces.length ? <span className="agent-composer__scope-empty-state">No matching workspaces</span> : null}
+            </div>
+            <button type="button" className="agent-composer__new-workspace" onClick={() => { setScopePickerOpen(false); onNewWorkspace(); }}><FolderPlus /><span>New Workspace</span></button>
+          </div>
+        ) : null}
+      </div>
       <div className="agent-composer__surface">
-        <AutoGrowTextArea aria-label="Message the agent" placeholder="Agent Runtime is not connected in this MVP" value={value} onChange={(event) => setValue(event.target.value)} />
-        <footer><Tooltip content="Attach context"><IconButton label="Attach context" size="small" disabled><Paperclip /></IconButton></Tooltip><span className="agent-composer__unavailable">Agent Runtime unavailable</span><span className="agent-composer__spacer" /><Tooltip content="Send request"><IconButton label="Send request" disabled><ArrowUp /></IconButton></Tooltip></footer>
+        <AutoGrowTextArea
+          aria-label="Message the agent"
+          placeholder="Send a value to the active canvas"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <footer><Tooltip content="Attach context"><IconButton label="Attach context" size="small" disabled><Paperclip /></IconButton></Tooltip><span className="agent-composer__unavailable">Canvas input</span><span className="agent-composer__spacer" /><Tooltip content="Send value"><IconButton label="Send value" active={Boolean(value.trim())} onClick={submit} disabled={!value.trim()}><ArrowUp /></IconButton></Tooltip></footer>
       </div>
     </section>
   );
