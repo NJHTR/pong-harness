@@ -143,8 +143,6 @@ function App() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget>();
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>();
-  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
-  const [newWorkspacePath, setNewWorkspacePath] = useState("");
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
   const [portDirection, setPortDirection] = useState<"input" | "output">("input");
@@ -467,11 +465,19 @@ function App() {
       const path = await open({ directory: true, multiple: false, title: "Choose Seekwd workspace folder" });
       if (typeof path !== "string") return;
       const name = path.split(/[\\/]/).filter(Boolean).pop() ?? "Workspace";
+      const existing = snapshot.workspaces.find((workspace) =>
+        workspace.path.replace(/[\\/]+$/, "").toLocaleLowerCase() === path.replace(/[\\/]+$/, "").toLocaleLowerCase(),
+      );
+      if (existing) {
+        selectWorkspace(existing);
+        showNotice("Workspace already added", `${existing.name} is already in your workspace list.`, "info");
+        return;
+      }
       const workspace = await client.createWorkspace({ name, path });
       setWorkspaceId(workspace.id);
-      setNewWorkspacePath(path);
-      setNewWorkspaceOpen(false);
-      showNotice("Workspace created", `${workspace.name} is ready for a new canvas.`, "success");
+      setCanvasId(undefined);
+      setSurface("canvas");
+      showNotice("Workspace added", `${workspace.name} now points to ${path}.`, "success");
     } catch (error) {
       reportError(error, "Unable to create workspace");
     }
@@ -696,10 +702,12 @@ function App() {
         onClose={() => void nativeWindow.close()}
         onMinimize={() => void nativeWindow.minimize()}
         onZoom={() => void nativeWindow.toggleMaximize()}
-        onTitlebarPointerDown={(event) => {
+        onTitlebarMouseDown={(event) => {
+          if (event.button !== 0) return;
           const target = event.target as HTMLElement;
           if (target.closest("button, input, a, [role='button']")) return;
-          void nativeWindow.startDragging();
+          if (event.detail === 2) void nativeWindow.toggleMaximize();
+          else void nativeWindow.startDragging();
         }}
         sidebar={
           <WorkspaceNavigation
@@ -716,7 +724,7 @@ function App() {
             onToggleWorkspace={(id) => setExpandedWorkspaces((items) => ({ ...items, [id]: !items[id] }))}
             onToggleCanvas={(id) => setExpandedCanvases((items) => ({ ...items, [id]: !items[id] }))}
             onNavigate={setSurface}
-            onNewWorkspace={() => setNewWorkspaceOpen(true)}
+            onNewWorkspace={() => void chooseWorkspaceFolder()}
             onAddCanvas={createCanvas}
             onSelectWorkspace={selectWorkspace}
             onSelectCanvas={selectCanvas}
@@ -799,27 +807,6 @@ function App() {
           </Notification>)}
         </div>
       ) : null}
-
-      <Dialog
-        open={Boolean(newWorkspaceOpen)}
-        title="New Workspace"
-        description="Create a local workspace boundary for canvases, files and runs."
-        onClose={() => setNewWorkspaceOpen(false)}
-        footer={
-          <>
-            <Button onClick={() => setNewWorkspaceOpen(false)}>Cancel</Button>
-            <Button variant="primary" leadingIcon={<FolderOpen />} onClick={() => void chooseWorkspaceFolder()}>Choose Folder</Button>
-          </>
-        }
-      >
-        <div className="workspace-picker">
-          <FolderOpen aria-hidden="true" />
-          <div>
-            <strong>{newWorkspacePath || "No folder selected"}</strong>
-            <span>Choose a local folder to use as the workspace boundary. Seekwd stores its own index separately and does not delete this folder during uninstall.</span>
-          </div>
-        </div>
-      </Dialog>
 
       <Dialog
         open={Boolean(renameTarget)}

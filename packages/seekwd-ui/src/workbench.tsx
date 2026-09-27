@@ -13,10 +13,10 @@ export interface WindowFrameProps extends HTMLAttributes<HTMLDivElement> {
   onClose?: () => void;
   onMinimize?: () => void;
   onZoom?: () => void;
-  onTitlebarPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onTitlebarMouseDown?: (event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-export function WindowFrame({ title, subtitle, toolbar, sidebar, inspector, bottomPanel, resizableInspector = Boolean(inspector), resizableBottomPanel = Boolean(bottomPanel), onClose, onMinimize, onZoom, onTitlebarPointerDown, children, className = "", style, ...props }: WindowFrameProps) {
+export function WindowFrame({ title, subtitle, toolbar, sidebar, inspector, bottomPanel, resizableInspector = Boolean(inspector), resizableBottomPanel = Boolean(bottomPanel), onClose, onMinimize, onZoom, onTitlebarMouseDown, children, className = "", style, ...props }: WindowFrameProps) {
   const [inspectorWidth, setInspectorWidth] = useState(260);
   const [bottomPanelHeight, setBottomPanelHeight] = useState(250);
   const resizeState = useRef<"inspector" | "bottom" | null>(null);
@@ -42,7 +42,7 @@ export function WindowFrame({ title, subtitle, toolbar, sidebar, inspector, bott
   } as React.CSSProperties;
   return (
     <div className={`sk-window ${className}`} style={frameStyle} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} {...props}>
-      <header className="sk-titlebar" data-tauri-drag-region onPointerDown={onTitlebarPointerDown}>
+      <header className="sk-titlebar" onMouseDown={onTitlebarMouseDown}>
         <div className="sk-traffic" aria-label="Window controls" role="group">
           <button type="button" className="sk-traffic__light sk-traffic__close" aria-label="Close window" onClick={onClose} tabIndex={onClose ? 0 : -1}>
             <svg viewBox="0 0 20.1197 19.7779" aria-hidden="true">

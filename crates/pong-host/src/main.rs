@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -83,7 +85,9 @@ impl SecurityConfig {
             && origin == format!("http://127.0.0.1:{}", uri.port_u16().unwrap());
         let is_tauri_desktop_origin = origin == "http://tauri.localhost";
         if !is_loopback_origin && !is_tauri_desktop_origin {
-            return Err("PONG_HOST_ALLOWED_ORIGIN must be an exact http://127.0.0.1:<port> origin");
+            return Err(
+                "PONG_HOST_ALLOWED_ORIGIN must be http://tauri.localhost or an exact http://127.0.0.1:<port> origin",
+            );
         }
         let allowed_origin =
             HeaderValue::from_str(origin).map_err(|_| "Invalid PONG_HOST_ALLOWED_ORIGIN")?;
@@ -2167,6 +2171,7 @@ mod tests {
 
     #[test]
     fn local_security_configuration_fails_closed() {
+        assert!(SecurityConfig::new(TEST_TOKEN.to_string(), "http://tauri.localhost").is_ok());
         assert!(SecurityConfig::new("short".to_string(), TEST_ORIGIN).is_err());
         assert!(SecurityConfig::new(TEST_TOKEN.to_string(), "http://evil.invalid:4174").is_err());
         assert!(SecurityConfig::new(TEST_TOKEN.to_string(), "http://127.0.0.1:4174/path").is_err());

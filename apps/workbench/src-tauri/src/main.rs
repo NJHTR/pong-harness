@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{
     env, fs, io,
     path::PathBuf,
@@ -60,14 +62,20 @@ fn spawn_host(app: &tauri::AppHandle, token: &str) -> io::Result<Child> {
             format!("pong-host binary was not found at {}", binary.display()),
         ));
     }
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .env("PONG_HOST_TOKEN", token)
-        .env("PONG_HOST_ALLOWED_ORIGIN", "http://127.0.0.1:4174")
+        .env("PONG_HOST_ALLOWED_ORIGIN", "http://tauri.localhost")
         .env("PONG_HOST_DB", database)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command.spawn()
 }
 
 fn main() {

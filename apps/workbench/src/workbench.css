@@ -121,11 +121,6 @@ button, input, textarea { font-family: inherit; }
 .new-workspace-form { display: grid; gap: 14px; }
 .new-workspace-form .sk-segmented { width: 100%; }
 .new-workspace-form .sk-segmented button { flex: 1; justify-content: center; }
-.workspace-picker { min-height: 72px; padding: 12px; display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--sk-divider); border-radius: 8px; background: color-mix(in srgb, var(--sk-bg-panel) 88%, transparent); }
-.workspace-picker > svg { width: 18px; height: 18px; flex: 0 0 18px; color: var(--sk-accent); }
-.workspace-picker > div { min-width: 0; display: grid; gap: 5px; }
-.workspace-picker strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.workspace-picker span { color: var(--sk-text-secondary); font-size: 10px; line-height: 1.45; }
 .sidebar-footer { margin-top: 0; padding-top: 8px; border-top: 1px solid var(--sk-divider); }
 
 .canvas-preview { position: absolute; inset: 0; overflow: hidden; background-image: radial-gradient(circle, var(--sk-canvas-grid) 1px, transparent 1px); background-size: 18px 18px; }
