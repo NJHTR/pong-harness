@@ -67,20 +67,36 @@ fn create_project_directory(
     name: String,
 ) -> Result<String, String> {
     let parent = if parent_path.trim().is_empty() {
-        let default_parent = app
+        let documents_parent = app
             .path()
             .document_dir()
             .map_err(|error| format!("Unable to locate the Documents folder: {error}"))?
             .join("Seekwd Projects");
-        if !default_parent.exists() {
-            fs::create_dir_all(&default_parent).map_err(|error| {
-                format!(
-                    "Unable to create the default projects folder at {}: {error}",
-                    default_parent.display()
-                )
-            })?;
+        match fs::create_dir_all(&documents_parent) {
+            Ok(()) => documents_parent,
+            Err(documents_error) => {
+                let fallback_parent = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|error| {
+                        format!(
+                            "Unable to create the default projects folder at {}: {documents_error}; \
+                             unable to locate the local fallback folder: {error}",
+                            documents_parent.display()
+                        )
+                    })?
+                    .join("Projects");
+                fs::create_dir_all(&fallback_parent).map_err(|fallback_error| {
+                    format!(
+                        "Unable to create the default projects folder at {}: {documents_error}; \
+                         local fallback {} also failed: {fallback_error}",
+                        documents_parent.display(),
+                        fallback_parent.display()
+                    )
+                })?;
+                fallback_parent
+            }
         }
-        default_parent
     } else {
         PathBuf::from(parent_path.trim())
     };
