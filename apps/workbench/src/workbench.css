@@ -411,6 +411,12 @@ button, input, textarea { font-family: inherit; }
 .settings-nav button svg:last-child { width: 10px; height: 10px; color: var(--sk-text-tertiary); }
 .settings-content { min-width: 0; }
 .settings-content .surface-section { max-width: 720px; }
+.settings-path-row { min-height: 58px; padding: 12px 2px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--sk-divider); }
+.settings-path-row > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.settings-path-row strong { font-size: 10px; }
+.settings-path-row p { margin: 0; overflow: hidden; color: var(--sk-text-secondary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.settings-path-row small { color: var(--sk-text-tertiary); font-size: 9px; }
+.settings-path-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .settings-content .sk-switch-row { min-height: 54px; padding: 10px 2px; border-bottom: 1px solid var(--sk-divider); }
 .settings-callout { min-height: 54px; margin-top: 14px; padding: 10px 12px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 1px solid var(--sk-border-subtle); border-radius: 7px; background: var(--sk-bg-panel); }
 .settings-callout > svg { width: 17px; height: 17px; color: var(--sk-accent); }
