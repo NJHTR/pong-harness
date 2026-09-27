@@ -217,7 +217,14 @@ function App() {
   };
 
   const reportError = (error: unknown, fallback: string) => {
-    showNotice("Action failed", error instanceof Error ? error.message : fallback, "error");
+    const message = typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : error && typeof error === "object" && "message" in error
+          ? String(error.message)
+          : fallback;
+    showNotice("Action failed", message || fallback, "error");
   };
 
   const flushNodeConfig = async (nodeId: string) => {
