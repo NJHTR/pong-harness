@@ -122,12 +122,12 @@ export function createLocalHostClient(): HostClient {
   return client;
 }
 
-export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317"): HostClient {
+export function createHttpHostClient(baseUrl = "http://127.0.0.1:4317", token?: string): HostClient {
   const root = baseUrl.replace(/\/$/, "");
   const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`${root}${path}`, {
       ...init,
-      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
     });
     if (!response.ok) {
       const body = await response.text();

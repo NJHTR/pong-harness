@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @seekwd/ui-lab dev",
     "dev:workbench": "pnpm --filter @seekwd/workbench dev",
+    "dev:desktop": "pnpm --filter @seekwd/workbench desktop:dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "check:requirements": "node scripts/check-requirement-ledger.mjs"

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Seekwd",
+  "version": "0.1.0",
+  "identifier": "com.seekwd.workbench",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @seekwd/workbench dev",
+    "devUrl": "http://127.0.0.1:4174",
+    "beforeBuildCommand": "pnpm --filter @seekwd/workbench build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

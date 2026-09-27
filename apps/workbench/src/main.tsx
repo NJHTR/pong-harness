@@ -70,7 +70,10 @@ import {
 import "@seekwd/ui/styles.css";
 import "./workbench.css";
 
-const client = import.meta.env.VITE_HOST_PROXY === "0" ? createLocalHostClient() : createHttpHostClient("");
+const desktopHost = (globalThis as typeof globalThis & { __SEEKWD_HOST__?: { baseUrl: string; token: string } }).__SEEKWD_HOST__;
+const client = import.meta.env.VITE_HOST_PROXY === "0"
+  ? createLocalHostClient()
+  : createHttpHostClient(desktopHost?.baseUrl ?? "", desktopHost?.token);
 
 type Surface = "canvas" | "automations" | "extensions" | "settings" | "files" | "environments" | "agents";
 type RuntimeState = "idle" | "running" | "waiting" | "success" | "error";

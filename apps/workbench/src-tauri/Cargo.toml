@@ -1,0 +1,18 @@
+[package]
+name = "seekwd-workbench"
+version = "0.1.0"
+description = "Seekwd local-first desktop workbench"
+authors = ["Seekwd"]
+license = "MIT"
+edition = "2024"
+
+[build-dependencies]
+tauri-build = { version = "2.4.1" }
+
+[dependencies]
+tauri = { version = "2.8.5" }
+uuid = { version = "1", features = ["v4"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
