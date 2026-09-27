@@ -149,6 +149,7 @@ function App() {
   const [workspaceMode, setWorkspaceMode] = useState<"create" | "open">("create");
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [workspaceParentPath, setWorkspaceParentPath] = useState("");
+  const [workspaceCreateConfirmation, setWorkspaceCreateConfirmation] = useState<{ name: string; parentPath: string }>();
   const [pendingWorkspace, setPendingWorkspace] = useState<{ name: string; path: string }>();
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
@@ -469,7 +470,7 @@ function App() {
 
   const chooseWorkspaceFolder = async () => {
     try {
-      const path = await open({ directory: true, multiple: false, title: workspaceMode === "create" ? "Choose parent folder" : "Open Seekwd project folder" });
+      const path = await open({ directory: true, multiple: false, title: "Open Seekwd project folder" });
       if (typeof path !== "string") return;
       const name = path.split(/[\\/]/).filter(Boolean).pop() ?? "Workspace";
       if (workspaceMode === "create") {
@@ -507,15 +508,21 @@ function App() {
 
   const createWorkspace = async () => {
     const name = newWorkspaceName.trim();
-    if (!name || !workspaceParentPath) return;
+    if (!name) return;
+    setWorkspaceCreateConfirmation({ name, parentPath: workspaceParentPath });
+  };
+
+  const confirmCreateWorkspace = async () => {
+    const request = workspaceCreateConfirmation;
+    if (!request) return;
     try {
       const path = await invoke<string>("create_project_directory", {
-        parentPath: workspaceParentPath,
-        name,
+        parentPath: request.parentPath,
+        name: request.name,
       });
-      const created = await addWorkspace(name, path);
+      const created = await addWorkspace(request.name, path);
       if (created) {
-        setWorkspaceDialogOpen(false);
+        setWorkspaceCreateConfirmation(undefined);
         setNewWorkspaceName("");
         setWorkspaceParentPath("");
       } else {
@@ -853,14 +860,14 @@ function App() {
 
       <Dialog
         open={workspaceDialogOpen}
-        title="项目"
-        description="选择创建一个新项目，或打开已有项目文件夹。项目文件夹不会被 Seekwd 自动删除。"
+        title="Project"
+        description="Create a new project or open an existing project folder. Seekwd will not delete project files during uninstall."
         onClose={() => setWorkspaceDialogOpen(false)}
         footer={
           <>
-            <Button onClick={() => setWorkspaceDialogOpen(false)}>取消</Button>
+            <Button onClick={() => setWorkspaceDialogOpen(false)}>Cancel</Button>
             {workspaceMode === "create"
-              ? <Button variant="primary" leadingIcon={<FolderPlus />} onClick={() => void createWorkspace()} disabled={!newWorkspaceName.trim() || !workspaceParentPath}>创建项目</Button>
+              ? <Button variant="primary" leadingIcon={<FolderPlus />} onClick={() => void createWorkspace()} disabled={!newWorkspaceName.trim()}>Create project</Button>
               : null}
           </>
         }
@@ -871,23 +878,23 @@ function App() {
           value={workspaceMode}
           onChange={setWorkspaceMode}
           options={[
-            { value: "create", label: "创建项目", icon: <FolderPlus /> },
-            { value: "open", label: "打开项目", icon: <FolderOpen /> },
+            { value: "create", label: "Create project", icon: <FolderPlus /> },
+            { value: "open", label: "Open project", icon: <FolderOpen /> },
           ]}
         />
         {workspaceMode === "create" ? (
           <div className="workspace-dialog-form">
-            <TextField label="项目名称" autoFocus value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="例如：惠州项目后端" />
+            <TextField label="Project name" autoFocus value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="e.g. huizhou-backend" />
             <button type="button" className="workspace-folder-picker" onClick={() => void chooseWorkspaceFolder()}>
               <FolderOpen aria-hidden="true" />
-              <span><strong>{workspaceParentPath || "选择项目所在的父文件夹"}</strong><small>创建后会自动建立同名项目文件夹</small></span>
+              <span><strong>{workspaceParentPath || "Default: Documents/Seekwd Projects"}</strong><small>Optional: choose a different parent folder</small></span>
               <ChevronRight aria-hidden="true" />
             </button>
           </div>
         ) : (
           <button type="button" className="workspace-folder-picker workspace-folder-picker--large" onClick={() => void chooseWorkspaceFolder()}>
             <FolderOpen aria-hidden="true" />
-            <span><strong>选择已有项目文件夹</strong><small>打开后会将它加入左侧工作区列表</small></span>
+            <span><strong>Choose an existing project folder</strong><small>The folder will be added to your workspace list</small></span>
             <ChevronRight aria-hidden="true" />
           </button>
         )}
@@ -895,21 +902,37 @@ function App() {
 
       <Dialog
         open={Boolean(pendingWorkspace)}
-        title="信任此项目？"
+        title="Trust this folder?"
         description={pendingWorkspace?.path}
         onClose={() => setPendingWorkspace(undefined)}
         footer={
           <>
-            <Button onClick={() => setPendingWorkspace(undefined)}>取消</Button>
+            <Button onClick={() => setPendingWorkspace(undefined)}>Cancel</Button>
             <Button variant="primary" onClick={() => {
               const item = pendingWorkspace;
               setPendingWorkspace(undefined);
               if (item) void addWorkspace(item.name, item.path);
-            }}>信任并打开</Button>
+            }}>Trust folder</Button>
           </>
         }
       >
-        <p className="workspace-trust-copy">Seekwd 可以读取和修改此项目中的文件。只有在你信任该文件夹内容时才继续。</p>
+        <p className="workspace-trust-copy">Seekwd can read and modify files in this folder. Continue only if you trust its contents.</p>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(workspaceCreateConfirmation)}
+        title="Create this project?"
+        description={workspaceCreateConfirmation ? `A new folder named “${workspaceCreateConfirmation.name}” will be created.` : undefined}
+        onClose={() => setWorkspaceCreateConfirmation(undefined)}
+        footer={
+          <>
+            <Button onClick={() => setWorkspaceCreateConfirmation(undefined)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void confirmCreateWorkspace()}>Create project</Button>
+          </>
+        }
+        className="workspace-dialog"
+      >
+        <p className="workspace-trust-copy">Location: {workspaceCreateConfirmation?.parentPath || "Documents/Seekwd Projects"}</p>
       </Dialog>
 
       <Dialog
