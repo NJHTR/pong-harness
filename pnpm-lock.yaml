@@ -82,6 +82,9 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2.11.5
         version: 2.11.5
+      '@tauri-apps/cli-win32-x64-msvc':
+        specifier: 2.11.5
+        version: 2.11.5
       '@types/node':
         specifier: ^22.20.4
         version: 22.20.4
@@ -1237,8 +1240,7 @@ snapshots:
   '@tauri-apps/cli-win32-ia32-msvc@2.11.5':
     optional: true
 
-  '@tauri-apps/cli-win32-x64-msvc@2.11.5':
-    optional: true
+  '@tauri-apps/cli-win32-x64-msvc@2.11.5': {}
 
   '@tauri-apps/cli@2.11.5':
     optionalDependencies:
