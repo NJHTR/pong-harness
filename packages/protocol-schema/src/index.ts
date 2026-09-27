@@ -14,6 +14,25 @@ export type {
   Workspace,
 } from "./host-wire.generated";
 
+export {
+  validateConnection,
+  type CanvasKind,
+  type ConnectionValidation,
+  type EntrypointKind,
+  type GraphCanvas,
+  type GraphEdge,
+  type GraphEdgeKind,
+  type GraphEntrypoint,
+  type GraphId,
+  type GraphNode,
+  type GraphPort,
+  type GraphPosition,
+  type NodeCategory,
+  type PortCardinality,
+  type PortDirection,
+  type PortValueType,
+} from "./graph";
+
 import type { CanvasPort, SaveRevisionRequest, StartRunRequest, SubmitRunInputRequest, UpdateNodeRequest } from "./host-wire.generated";
 
 export type Id = string;
