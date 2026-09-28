@@ -7,7 +7,7 @@
   "scripts": {
     "generate": "node scripts/generate.mjs",
     "check:generated": "node scripts/generate.mjs --check",
-    "test": "pnpm check:generated && node --test test/*.test.mjs",
+    "test": "pnpm check:generated && node --experimental-strip-types --test test/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
