@@ -1,4 +1,4 @@
-import { validateRuntimeConnection, type Canvas, type CanvasEdge, type CanvasNode, type CanvasPort, type CanvasRevision, type CreateCanvasInput, type CreateEdgeInput, type CreateNodeInput, type CreatePortInput, type CreateWorkspaceInput, type GraphDocument, type HostError, type HostEventBatch, type HostSnapshot, type Id, type Notification, type NodeCategory as RuntimeNodeCategory, type PortKind as RuntimePortKind, type Run, type RuntimeGraphPort, type StartRunInput, type SubmitRunInput, type UpdateNodeInput, type Workspace } from "@seekwd/protocol-schema";
+import { validateRuntimeConnection, type Canvas, type CanvasEdge, type CanvasNode, type CanvasPort, type CanvasRevision, type CreateCanvasInput, type CreateEdgeInput, type CreateNodeInput, type CreatePortInput, type CreateWorkspaceInput, type GraphDocument, type HostError, type HostEventBatch, type HostSnapshot, type Id, type Notification, type NodeCategory as RuntimeNodeCategory, type PortKind as RuntimePortKind, type Run, type RuntimeGraphPort, type RuntimeValue, type StartRunInput, type SubmitRunInput, type UpdateNodeInput, type Workspace } from "@seekwd/protocol-schema";
 
 export interface HostClient {
   snapshot(): Promise<HostSnapshot>;
@@ -130,6 +130,28 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "workspace.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Request", "input", "data"), port(nodeId, "Report", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Artifact", "output", "resource"), port(nodeId, "Complete", "output", "event")];
 };
+const valueOutputPort = (node: CanvasNode | undefined) => {
+  if (!node) return undefined;
+  const preferred = node.kind === "input.text"
+    ? "Text"
+    : node.kind === "input.file"
+      ? "File"
+      : node.kind === "workspace.scan"
+        ? "Result"
+        : node.kind === "workspace.analyze"
+          ? "Report"
+          : "Result";
+  return node.ports.find((candidate) => candidate.direction === "output" && (candidate.kind === "data" || candidate.kind === "resource") && candidate.name === preferred)
+    ?? node.ports.find((candidate) => candidate.direction === "output" && (candidate.kind === "data" || candidate.kind === "resource"));
+};
+const runtimeValueText = (value: RuntimeValue | undefined) => {
+  if (!value) return "";
+  if (value.type === "text") return value.value;
+  if (value.type === "number" || value.type === "boolean") return String(value.value);
+  if (value.type === "json") return JSON.stringify(value.value, null, 2);
+  if (value.type === "artifact_ref") return value.artifactId;
+  return value.resourceId;
+};
 const seed = (): HostSnapshot => {
   const workspace: Workspace = { id: "ws_thesis", name: "Thesis Workspace", path: "D:/Documents/Thesis", updatedAt: now() };
   const canvas: Canvas = { id: "canvas_citation", workspaceId: workspace.id, name: "Citation Review", status: "idle", defaultEntrypointNodeId: null, revision: 3, draftRevision: 0, draftDirty: false, updatedAt: now() };
@@ -137,10 +159,21 @@ const seed = (): HostSnapshot => {
 };
 
 export function createLocalHostClient(): HostClient {
-  const stored = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<HostSnapshot> | null;
+  type LegacyRun = Run & { nodeValues?: Record<string, string> };
+  type LegacySnapshot = Omit<Partial<HostSnapshot>, "runs"> & { runs?: LegacyRun[] };
+  const stored = JSON.parse(localStorage.getItem(key) ?? "null") as LegacySnapshot | null;
   let state: HostSnapshot = stored
-    ? { snapshotVersion: stored.snapshotVersion ?? 1, workspaces: stored.workspaces ?? [], canvases: (stored.canvases ?? []).map((canvas) => ({ ...canvas, draftRevision: canvas.draftRevision ?? 0, draftDirty: canvas.draftDirty ?? false })), nodes: (stored.nodes ?? []).map((node) => ({ ...node, ports: node.ports ?? defaultPorts(node.id, node.kind) })), edges: (stored.edges ?? []).map((edge) => ({ ...edge, sourcePortId: edge.sourcePortId ?? "", targetPortId: edge.targetPortId ?? "", kind: edge.kind ?? "data" })), revisions: (stored.revisions ?? []).map((revision) => ({ ...revision, contentDigest: revision.contentDigest ?? legacyDigest, graphJson: revision.graphJson ?? JSON.stringify({ nodes: [], edges: [] }) })), runs: (stored.runs ?? []).map((run) => ({ ...run, finishedAt: run.finishedAt ?? null })), notifications: (stored.notifications ?? []).map((notification) => ({ ...notification, runId: notification.runId ?? null, canvasId: notification.canvasId ?? null })) }
+    ? { snapshotVersion: stored.snapshotVersion ?? 1, workspaces: stored.workspaces ?? [], canvases: (stored.canvases ?? []).map((canvas) => ({ ...canvas, draftRevision: canvas.draftRevision ?? 0, draftDirty: canvas.draftDirty ?? false })), nodes: (stored.nodes ?? []).map((node) => ({ ...node, ports: node.ports ?? defaultPorts(node.id, node.kind) })), edges: (stored.edges ?? []).map((edge) => ({ ...edge, sourcePortId: edge.sourcePortId ?? "", targetPortId: edge.targetPortId ?? "", kind: edge.kind ?? "data" })), revisions: (stored.revisions ?? []).map((revision) => ({ ...revision, contentDigest: revision.contentDigest ?? legacyDigest, graphJson: revision.graphJson ?? JSON.stringify({ nodes: [], edges: [] }) })), runs: (stored.runs ?? []).map((run) => ({ ...run, finishedAt: run.finishedAt ?? null, portValues: run.portValues ?? {} })), notifications: (stored.notifications ?? []).map((notification) => ({ ...notification, runId: notification.runId ?? null, canvasId: notification.canvasId ?? null })) }
     : seed();
+  for (const run of state.runs as LegacyRun[]) {
+    for (const [nodeId, value] of Object.entries(run.nodeValues ?? {})) {
+      const output = valueOutputPort(state.nodes.find((node) => node.id === nodeId));
+      if (output && !run.portValues?.[output.id]) {
+        run.portValues = { ...(run.portValues ?? {}), [output.id]: { type: "text", value } };
+      }
+    }
+    delete run.nodeValues;
+  }
   const listeners = new Set<(snapshot: HostSnapshot) => void>();
   let localGlobalPosition = 0;
   const commit = () => { state.snapshotVersion += 1; localGlobalPosition += 1; localStorage.setItem(key, JSON.stringify(state)); listeners.forEach((listener) => listener(structuredClone(state))); };
@@ -181,19 +214,14 @@ export function createLocalHostClient(): HostClient {
     }
     return undefined;
   };
-  const nodeTextValue = (node: CanvasNode | undefined, nodeValues: Record<string, string> = {}) => {
-    const value = node ? nodeValues[node.id] ?? node.config?.inputValue : undefined;
-    return typeof value === "string" ? value.trim() : "";
-  };
-  const resolveTextOutput = (canvasId: Id, nodeValues: Record<string, string> = {}) => {
+  const resolveTextOutput = (canvasId: Id, portValues: Record<string, RuntimeValue> = {}) => {
     const outputs = state.nodes.filter((node) => node.canvasId === canvasId && node.kind === "output.text");
     if (!outputs.length) return undefined;
     return outputs.map((output) => {
       const input = output.ports.find((candidate) => candidate.name === "Input" && candidate.direction === "input");
       const edge = state.edges.find((candidate) => candidate.canvasId === canvasId && candidate.targetPortId === input?.id);
-      const source = edge ? state.nodes.find((node) => node.id === edge.sourceNodeId && node.kind === "input.text") : undefined;
-      const value = nodeTextValue(source, nodeValues);
-      if (!input || !edge || !source || !value) throw new Error("Text Output requires a configured Text Input value");
+      const value = edge ? runtimeValueText(portValues[edge.sourcePortId]).trim() : "";
+      if (!input || !edge || !value) throw new Error("Text Output requires a connected source port value");
       return value;
     }).join("\n");
   };
@@ -209,7 +237,14 @@ export function createLocalHostClient(): HostClient {
       currentCanvas.status = "waiting_input";
     } else {
       try {
-        current.result = resolveTextOutput(canvasId, current.nodeValues ?? {}) ?? null;
+        for (const node of state.nodes.filter((candidate) => candidate.canvasId === canvasId && candidate.kind === "input.text")) {
+          const configured = typeof node.config?.inputValue === "string" ? node.config.inputValue.trim() : "";
+          const output = valueOutputPort(node);
+          if (configured && output && !current.portValues?.[output.id]) {
+            current.portValues = { ...(current.portValues ?? {}), [output.id]: { type: "text", value: configured } };
+          }
+        }
+        current.result = resolveTextOutput(canvasId, current.portValues ?? {}) ?? null;
         current.status = "succeeded";
         current.finishedAt = now();
         currentCanvas.status = "succeeded";
@@ -295,7 +330,7 @@ export function createLocalHostClient(): HostClient {
         inputPrompt: null,
         result: null,
         completedNodeIds: [],
-        nodeValues: {},
+        portValues: {},
       };
       item.status = "running";
       state.runs.unshift(run);
@@ -312,7 +347,9 @@ export function createLocalHostClient(): HostClient {
       const value = input.value.trim();
       if (!value) throw new Error("A result value is required");
       if (run.currentNodeId) {
-        run.nodeValues = { ...(run.nodeValues ?? {}), [run.currentNodeId]: value };
+        const output = valueOutputPort(state.nodes.find((node) => node.id === run.currentNodeId));
+        if (!output) throw new Error("The waiting node has no data or resource output port");
+        run.portValues = { ...(run.portValues ?? {}), [output.id]: { type: "text", value } };
         if (!(run.completedNodeIds ?? []).includes(run.currentNodeId)) {
           run.completedNodeIds = [...(run.completedNodeIds ?? []), run.currentNodeId];
         }

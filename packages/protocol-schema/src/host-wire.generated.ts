@@ -15,6 +15,31 @@ export type HostWire =
   | CreatePortRequest
   | UpdateNodeRequest;
 export type RunStatus = "idle" | "queued" | "running" | "waiting_input" | "succeeded" | "failed";
+export type RuntimeValue =
+  | {
+      type: "text";
+      value: string;
+    }
+  | {
+      type: "number";
+      value: number;
+    }
+  | {
+      type: "boolean";
+      value: boolean;
+    }
+  | {
+      type: "json";
+      value: unknown;
+    }
+  | {
+      type: "artifact_ref";
+      artifactId: string;
+    }
+  | {
+      type: "resource_ref";
+      resourceId: string;
+    };
 export type StartRunRequest = StartRunRequest1 & {
   revision: number;
   entrypoint?: "default";
@@ -105,8 +130,8 @@ export interface Run {
   inputPrompt?: string | null;
   result?: string | null;
   completedNodeIds?: string[];
-  nodeValues?: {
-    [k: string]: string;
+  portValues?: {
+    [k: string]: RuntimeValue;
   };
 }
 export interface Notification {

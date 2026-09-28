@@ -98,6 +98,64 @@
         "graphJson": { "type": "string", "minLength": 2 }
       }
     },
+    "RuntimeValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "text" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "number" },
+            "value": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "boolean" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "json" },
+            "value": {}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "artifactId"],
+          "properties": {
+            "type": { "const": "artifact_ref" },
+            "artifactId": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "resourceId"],
+          "properties": {
+            "type": { "const": "resource_ref" },
+            "resourceId": { "type": "string" }
+          }
+        }
+      ]
+    },
     "Run": {
       "type": "object",
       "additionalProperties": false,
@@ -113,9 +171,9 @@
         "inputPrompt": { "type": ["string", "null"] },
         "result": { "type": ["string", "null"] },
         "completedNodeIds": { "type": "array", "items": { "type": "string" } },
-        "nodeValues": {
+        "portValues": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": { "$ref": "#/definitions/RuntimeValue" }
         }
       }
     },

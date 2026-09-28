@@ -11,7 +11,7 @@ use axum::{
 use fs2::FileExt;
 use pong_core::{
     Canvas, CanvasEdge, CanvasNode, CanvasPort, CanvasRevision, Notification, PortDirection,
-    PortKind, Run, RunStatus, Workspace,
+    PortKind, Run, RunStatus, RuntimeValue, Workspace,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -125,9 +125,7 @@ async fn bind_host_listener(retry_startup: bool) -> io::Result<tokio::net::TcpLi
     for attempt in 0..attempts {
         match tokio::net::TcpListener::bind(HOST_BIND_ADDRESS).await {
             Ok(listener) => return Ok(listener),
-            Err(error)
-                if error.kind() == io::ErrorKind::AddrInUse && attempt + 1 < attempts =>
-            {
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse && attempt + 1 < attempts => {
                 tokio::time::sleep(STARTUP_RETRY_DELAY).await;
             }
             Err(error) => return Err(error),
@@ -616,6 +614,30 @@ fn rebuild_host_events(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Res
 
 impl From<Snapshot> for Store {
     fn from(snapshot: Snapshot) -> Self {
+        let nodes = snapshot
+            .nodes
+            .into_iter()
+            .map(|item| (item.id, item))
+            .collect::<HashMap<_, _>>();
+        let runs = snapshot
+            .runs
+            .into_iter()
+            .map(|mut run| {
+                if !run.node_values.is_empty() {
+                    for (node_id, value) in std::mem::take(&mut run.node_values) {
+                        let Some(port_id) =
+                            nodes.get(&node_id).and_then(primary_value_output_port_id)
+                        else {
+                            continue;
+                        };
+                        run.port_values
+                            .entry(port_id)
+                            .or_insert_with(|| RuntimeValue::text(value));
+                    }
+                }
+                (run.id, run)
+            })
+            .collect();
         Self {
             workspaces: snapshot
                 .workspaces
@@ -627,11 +649,7 @@ impl From<Snapshot> for Store {
                 .into_iter()
                 .map(|item| (item.id, item))
                 .collect(),
-            nodes: snapshot
-                .nodes
-                .into_iter()
-                .map(|item| (item.id, item))
-                .collect(),
+            nodes,
             edges: snapshot
                 .edges
                 .into_iter()
@@ -642,11 +660,7 @@ impl From<Snapshot> for Store {
                 .into_iter()
                 .map(|item| (item.id, item))
                 .collect(),
-            runs: snapshot
-                .runs
-                .into_iter()
-                .map(|item| (item.id, item))
-                .collect(),
+            runs,
             notifications: snapshot
                 .notifications
                 .into_iter()
@@ -1101,21 +1115,72 @@ fn compile_host_execution_plan(
     })
 }
 
-fn node_text_value(
-    node: &CanvasNode,
-    node_values: &HashMap<Uuid, String>,
-) -> Option<String> {
-    node_values
-        .get(&node.id)
-        .map(String::as_str)
-        .or_else(|| {
-            node.config
-                .get("inputValue")
-                .and_then(serde_json::Value::as_str)
+fn output_port_id(node: &CanvasNode, name: &str) -> Option<Uuid> {
+    node.ports
+        .iter()
+        .find(|port| {
+            port.name == name
+                && matches!(port.direction, PortDirection::Output)
+                && matches!(port.kind, PortKind::Data | PortKind::Resource)
         })
+        .map(|port| port.id)
+}
+
+fn primary_value_output_port_id(node: &CanvasNode) -> Option<Uuid> {
+    let preferred_name = match node.kind.as_str() {
+        "input.text" => "Text",
+        "input.file" => "File",
+        "workspace.scan" => "Result",
+        "workspace.analyze" => "Report",
+        _ => "Result",
+    };
+    output_port_id(node, preferred_name).or_else(|| {
+        node.ports
+            .iter()
+            .find(|port| {
+                matches!(port.direction, PortDirection::Output)
+                    && matches!(port.kind, PortKind::Data | PortKind::Resource)
+            })
+            .map(|port| port.id)
+    })
+}
+
+fn runtime_value_text(value: &RuntimeValue) -> Result<String, String> {
+    match value {
+        RuntimeValue::Text { value } => Ok(value.clone()),
+        RuntimeValue::Number { value } => Ok(value.to_string()),
+        RuntimeValue::Boolean { value } => Ok(value.to_string()),
+        RuntimeValue::Json { value } => serde_json::to_string_pretty(value)
+            .map_err(|error| format!("Unable to render JSON runtime value: {error}")),
+        RuntimeValue::ArtifactRef { artifact_id } => Ok(artifact_id.to_string()),
+        RuntimeValue::ResourceRef { resource_id } => Ok(resource_id.to_string()),
+    }
+}
+
+fn configured_text_value(node: &CanvasNode) -> Option<String> {
+    node.config
+        .get("inputValue")
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn connected_runtime_value<'a>(
+    store: &Store,
+    canvas_id: Uuid,
+    target_node: &CanvasNode,
+    target_port_name: &str,
+    port_values: &'a HashMap<Uuid, RuntimeValue>,
+) -> Option<&'a RuntimeValue> {
+    let target_port = target_node.ports.iter().find(|port| {
+        port.name == target_port_name && matches!(port.direction, PortDirection::Input)
+    })?;
+    let edge = store
+        .edges
+        .values()
+        .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == target_port.id)?;
+    port_values.get(&edge.source_port_id)
 }
 
 fn connected_text_value(
@@ -1123,28 +1188,19 @@ fn connected_text_value(
     canvas_id: Uuid,
     target_node: &CanvasNode,
     target_port_name: &str,
-    node_values: &HashMap<Uuid, String>,
+    port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Option<String> {
-    let target_port = target_node
-        .ports
-        .iter()
-        .find(|port| port.name == target_port_name && matches!(port.direction, PortDirection::Input))?;
-    let edge = store
-        .edges
-        .values()
-        .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == target_port.id)?;
-    let source = store.nodes.get(&edge.source_node_id)?;
-    if source.kind == "input.text" {
-        node_text_value(source, node_values)
-    } else {
-        None
-    }
+    connected_runtime_value(store, canvas_id, target_node, target_port_name, port_values)
+        .and_then(RuntimeValue::as_text)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn resolve_text_output(
     store: &Store,
     canvas_id: Uuid,
-    node_values: &HashMap<Uuid, String>,
+    port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Result<Option<String>, String> {
     let output_nodes = store
         .nodes
@@ -1161,7 +1217,7 @@ fn resolve_text_output(
             store,
             canvas_id,
             output_node,
-            node_values,
+            port_values,
         )?);
     }
     Ok(Some(values.join("\n")))
@@ -1171,7 +1227,7 @@ fn resolve_output_node(
     store: &Store,
     canvas_id: Uuid,
     output_node: &CanvasNode,
-    node_values: &HashMap<Uuid, String>,
+    port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Result<String, String> {
     let input_port = output_node
         .ports
@@ -1183,25 +1239,10 @@ fn resolve_output_node(
         .values()
         .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == input_port.id)
         .ok_or_else(|| "Connect a text value to Text Output.Input before running".to_string())?;
-    let source = store
-        .nodes
-        .get(&edge.source_node_id)
-        .ok_or_else(|| "Text Output source node was not found".to_string())?;
-    if let Some(value) = node_values.get(&source.id) {
-        return Ok(value.clone());
-    }
-    match source.kind.as_str() {
-        "input.text" => node_text_value(source, node_values)
-            .ok_or_else(|| "Set a value on the connected Text Input node before running".to_string()),
-        "workspace.scan" => resolve_workspace_scan(store, canvas_id)?
-            .ok_or_else(|| "Workspace scan did not produce output".to_string()),
-        "workspace.analyze" => resolve_project_analysis(store, canvas_id, node_values)?
-            .ok_or_else(|| "Project analysis did not produce a report".to_string()),
-        _ => Err(
-            "Text Output currently accepts Text Input, Workspace Scan, or Project Analyze nodes"
-                .to_string(),
-        ),
-    }
+    let value = port_values
+        .get(&edge.source_port_id)
+        .ok_or_else(|| "The connected source port did not produce a runtime value".to_string())?;
+    runtime_value_text(value)
 }
 
 fn resolve_workspace_scan(store: &Store, canvas_id: Uuid) -> Result<Option<String>, String> {
@@ -1458,7 +1499,7 @@ fn language_name(extension: &str) -> &str {
 fn resolve_project_analysis(
     store: &Store,
     canvas_id: Uuid,
-    node_values: &HashMap<Uuid, String>,
+    port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Result<Option<String>, String> {
     let analyze_nodes = store
         .nodes
@@ -1486,19 +1527,27 @@ fn resolve_project_analysis(
 
     let max_entries = analyze_nodes
         .iter()
-        .filter_map(|node| node.config.get("maxEntries").and_then(serde_json::Value::as_u64))
+        .filter_map(|node| {
+            node.config
+                .get("maxEntries")
+                .and_then(serde_json::Value::as_u64)
+        })
         .min()
         .unwrap_or(5000)
         .clamp(1, 20_000) as usize;
     let max_depth = analyze_nodes
         .iter()
-        .filter_map(|node| node.config.get("maxDepth").and_then(serde_json::Value::as_u64))
+        .filter_map(|node| {
+            node.config
+                .get("maxDepth")
+                .and_then(serde_json::Value::as_u64)
+        })
         .min()
         .unwrap_or(16)
         .clamp(1, 32) as usize;
     let request = analyze_nodes
         .iter()
-        .find_map(|node| connected_text_value(store, canvas_id, node, "Request", node_values))
+        .find_map(|node| connected_text_value(store, canvas_id, node, "Request", port_values))
         .or_else(|| {
             analyze_nodes.iter().find_map(|node| {
                 node.config
@@ -1509,7 +1558,10 @@ fn resolve_project_analysis(
                     .map(str::to_string)
             })
         })
-        .unwrap_or_else(|| "Analyze the project structure, build system, languages, tests, and likely entrypoints.".to_string());
+        .unwrap_or_else(|| {
+            "Analyze the project structure, build system, languages, tests, and likely entrypoints."
+                .to_string()
+        });
 
     let ignored = [
         ".git",
@@ -1554,7 +1606,8 @@ fn resolve_project_analysis(
                 truncated = true;
                 break;
             }
-            let item = item.map_err(|error| format!("Unable to inspect workspace entry: {error}"))?;
+            let item =
+                item.map_err(|error| format!("Unable to inspect workspace entry: {error}"))?;
             let file_type = item
                 .file_type()
                 .map_err(|error| format!("Unable to inspect {}: {error}", item.path().display()))?;
@@ -1604,7 +1657,9 @@ fn resolve_project_analysis(
                 test_files += 1;
             }
             if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
-                *language_counts.entry(extension.to_ascii_lowercase()).or_default() += 1;
+                *language_counts
+                    .entry(extension.to_ascii_lowercase())
+                    .or_default() += 1;
             }
             if manifest_names.contains(&name.as_str()) && manifests.len() < 64 {
                 manifests.push((path.clone(), relative.clone()));
@@ -1641,7 +1696,9 @@ fn resolve_project_analysis(
             .unwrap_or_default();
         let project_type = match name {
             "pom.xml" => "Java / Maven",
-            "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts" => "JVM / Gradle",
+            "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts" => {
+                "JVM / Gradle"
+            }
             "package.json" => "Node.js / JavaScript",
             "Cargo.toml" => "Rust / Cargo",
             "pyproject.toml" | "requirements.txt" => "Python",
@@ -1680,20 +1737,26 @@ fn resolve_project_analysis(
             project_types.iter().cloned().collect::<Vec<_>>().join(", ")
         ));
     } else if let Some(project_type) = project_types.first() {
-        findings.push(format!("The primary detected project ecosystem is {project_type}."));
+        findings.push(format!(
+            "The primary detected project ecosystem is {project_type}."
+        ));
     } else {
         findings.push("No supported root or module manifest was detected.".to_string());
     }
     if test_files == 0 {
         findings.push("No conventional test files were detected in the bounded scan.".to_string());
     } else {
-        findings.push(format!("{test_files} conventional test files were detected."));
+        findings.push(format!(
+            "{test_files} conventional test files were detected."
+        ));
     }
     if !has_readme {
         findings.push("No top-level README was detected.".to_string());
     }
     if truncated {
-        findings.push("The inventory reached its configured safety limit; results are partial.".to_string());
+        findings.push(
+            "The inventory reached its configured safety limit; results are partial.".to_string(),
+        );
     }
 
     serde_json::to_string_pretty(&serde_json::json!({
@@ -1735,12 +1798,12 @@ fn resolve_project_analysis(
 fn resolve_run_output(
     store: &Store,
     canvas_id: Uuid,
-    node_values: &HashMap<Uuid, String>,
+    port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Result<Option<String>, String> {
-    if let Some(value) = resolve_text_output(store, canvas_id, node_values)? {
+    if let Some(value) = resolve_text_output(store, canvas_id, port_values)? {
         return Ok(Some(value));
     }
-    if let Some(value) = resolve_project_analysis(store, canvas_id, node_values)? {
+    if let Some(value) = resolve_project_analysis(store, canvas_id, port_values)? {
         return Ok(Some(value));
     }
     resolve_workspace_scan(store, canvas_id)
@@ -1752,12 +1815,12 @@ enum HostRunAdvance {
         node_id: Uuid,
         prompt: String,
         completed_node_ids: Vec<Uuid>,
-        node_values: HashMap<Uuid, String>,
+        port_values: HashMap<Uuid, RuntimeValue>,
     },
     Succeeded {
         result: Option<String>,
         completed_node_ids: Vec<Uuid>,
-        node_values: HashMap<Uuid, String>,
+        port_values: HashMap<Uuid, RuntimeValue>,
     },
 }
 
@@ -1765,7 +1828,7 @@ fn advance_host_execution(
     store: &Store,
     canvas_id: Uuid,
     completed_node_ids: &[Uuid],
-    initial_node_values: &HashMap<Uuid, String>,
+    initial_port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Result<HostRunAdvance, String> {
     let plan = compile_host_execution_plan(store, canvas_id).map_err(str::to_string)?;
     let mut completed = completed_node_ids
@@ -1773,7 +1836,7 @@ fn advance_host_execution(
         .copied()
         .collect::<std::collections::HashSet<_>>();
     let mut ordered_completed = completed_node_ids.to_vec();
-    let mut node_values = initial_node_values.clone();
+    let mut port_values = initial_port_values.clone();
     let mut final_result = None;
 
     for node_id in plan.node_order {
@@ -1787,14 +1850,23 @@ fn advance_host_execution(
         match node.kind.as_str() {
             "trigger.start" => {}
             "input.text" => {
-                if let Some(value) = node_text_value(node, &node_values) {
-                    node_values.insert(node.id, value);
+                if let Some(value) = configured_text_value(node) {
+                    let port_id = output_port_id(node, "Text")
+                        .ok_or_else(|| "Text Input is missing its Text output port".to_string())?;
+                    port_values.insert(port_id, RuntimeValue::text(value));
+                    final_result = port_values
+                        .get(&port_id)
+                        .and_then(RuntimeValue::as_text)
+                        .map(str::to_string);
+                } else if primary_value_output_port_id(node)
+                    .is_some_and(|port_id| port_values.contains_key(&port_id))
+                {
                 } else {
                     return Ok(HostRunAdvance::Waiting {
                         node_id: node.id,
                         prompt: format!("Enter a value for {}", node.name),
                         completed_node_ids: ordered_completed,
-                        node_values,
+                        port_values,
                     });
                 }
             }
@@ -1810,39 +1882,52 @@ fn advance_host_execution(
                     node_id: node.id,
                     prompt,
                     completed_node_ids: ordered_completed,
-                    node_values,
+                    port_values,
                 });
             }
             "workspace.scan" => {
                 let value = resolve_workspace_scan(store, canvas_id)?
                     .ok_or_else(|| "Workspace scan did not produce output".to_string())?;
-                node_values.insert(node.id, value.clone());
+                let json = serde_json::from_str(&value)
+                    .map_err(|error| format!("Workspace scan produced invalid JSON: {error}"))?;
+                let port_id = output_port_id(node, "Result").ok_or_else(|| {
+                    "Workspace Scan is missing its Result output port".to_string()
+                })?;
+                port_values.insert(port_id, RuntimeValue::Json { value: json });
                 final_result = Some(value);
             }
             "workspace.analyze" => {
-                let value = resolve_project_analysis(store, canvas_id, &node_values)?
+                let value = resolve_project_analysis(store, canvas_id, &port_values)?
                     .ok_or_else(|| "Project analysis did not produce a report".to_string())?;
-                node_values.insert(node.id, value.clone());
+                let json = serde_json::from_str(&value)
+                    .map_err(|error| format!("Project analysis produced invalid JSON: {error}"))?;
+                let port_id = output_port_id(node, "Report").ok_or_else(|| {
+                    "Project Analyze is missing its Report output port".to_string()
+                })?;
+                port_values.insert(port_id, RuntimeValue::Json { value: json });
                 final_result = Some(value);
             }
             "output.text" => {
-                let value = resolve_output_node(store, canvas_id, node, &node_values)?;
-                node_values.insert(node.id, value.clone());
+                let value = resolve_output_node(store, canvas_id, node, &port_values)?;
                 final_result = Some(value);
             }
-            kind => return Err(format!("Node kind {kind} is not executable by the local Host")),
+            kind => {
+                return Err(format!(
+                    "Node kind {kind} is not executable by the local Host"
+                ));
+            }
         }
         completed.insert(node.id);
         ordered_completed.push(node.id);
     }
 
     if final_result.is_none() {
-        final_result = resolve_run_output(store, canvas_id, &node_values)?;
+        final_result = resolve_run_output(store, canvas_id, &port_values)?;
     }
     Ok(HostRunAdvance::Succeeded {
         result: final_result,
         completed_node_ids: ordered_completed,
-        node_values,
+        port_values,
     })
 }
 
@@ -2504,7 +2589,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                     &store,
                     run.canvas_id,
                     &run.completed_node_ids,
-                    &run.node_values,
+                    &run.port_values,
                 ),
             )
         };
@@ -2518,7 +2603,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 node_id,
                 prompt,
                 completed_node_ids,
-                node_values,
+                port_values,
             }) => {
                 let Some(run) = store.runs.get_mut(&run_id) else {
                     return;
@@ -2527,7 +2612,8 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 run.current_node_id = Some(node_id);
                 run.input_prompt = Some(prompt.clone());
                 run.completed_node_ids = completed_node_ids;
-                run.node_values = node_values;
+                run.port_values = port_values;
+                run.node_values.clear();
                 (
                     "Run waiting for input".to_string(),
                     format!("{canvas_name} is waiting for a local input: {prompt}."),
@@ -2538,7 +2624,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
             Ok(HostRunAdvance::Succeeded {
                 result,
                 completed_node_ids,
-                node_values,
+                port_values,
             }) => {
                 let Some(run) = store.runs.get_mut(&run_id) else {
                     return;
@@ -2548,7 +2634,8 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 run.input_prompt = None;
                 run.result = result.clone();
                 run.completed_node_ids = completed_node_ids;
-                run.node_values = node_values;
+                run.port_values = port_values;
+                run.node_values.clear();
                 run.finished_at = Some(now());
                 (
                     if result.is_some() {
@@ -2616,10 +2703,10 @@ async fn submit_run_input(
     }
     let mut store = state.inner.lock().unwrap();
     let previous = store.clone();
-    let canvas_id = {
+    let waiting_node = {
         let run = store
             .runs
-            .get_mut(&run_id)
+            .get(&run_id)
             .ok_or_else(|| not_found_error("Run was not found"))?;
         if !matches!(run.status, RunStatus::WaitingInput) {
             return Err(HostError::new(
@@ -2629,12 +2716,36 @@ async fn submit_run_input(
                 false,
             ));
         }
-        let current_node_id = run.current_node_id;
-        if let Some(node_id) = current_node_id {
+        run.current_node_id
+            .map(|node_id| {
+                let node = store
+                    .nodes
+                    .get(&node_id)
+                    .ok_or_else(|| not_found_error("The waiting node was not found"))?;
+                let output_port_id = primary_value_output_port_id(node).ok_or_else(|| {
+                    HostError::new(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "NODE_OUTPUT_REQUIRED",
+                        "The waiting node has no data or resource output port",
+                        false,
+                    )
+                })?;
+                Ok((node_id, output_port_id))
+            })
+            .transpose()?
+    };
+    let canvas_id = {
+        let run = store
+            .runs
+            .get_mut(&run_id)
+            .ok_or_else(|| not_found_error("Run was not found"))?;
+        if let Some((node_id, output_port_id)) = waiting_node {
             if !run.completed_node_ids.contains(&node_id) {
                 run.completed_node_ids.push(node_id);
             }
-            run.node_values.insert(node_id, value.to_string());
+            run.port_values
+                .insert(output_port_id, RuntimeValue::text(value));
+            run.node_values.clear();
         }
         run.status = RunStatus::Running;
         run.finished_at = None;
@@ -2749,6 +2860,7 @@ async fn start_run(
         input_prompt: None,
         result: None,
         completed_node_ids: Vec::new(),
+        port_values: HashMap::new(),
         node_values: HashMap::new(),
     };
     store.runs.insert(run.id, run.clone());
@@ -2761,12 +2873,8 @@ async fn start_run(
 #[tokio::main]
 async fn main() {
     let security = SecurityConfig::from_env().expect("configure local Host access");
-    let watch_parent = parse_parent_watch(
-        env::var("PONG_HOST_PARENT_WATCH")
-            .ok()
-            .as_deref(),
-    )
-    .expect("configure Host parent lifecycle");
+    let watch_parent = parse_parent_watch(env::var("PONG_HOST_PARENT_WATCH").ok().as_deref())
+        .expect("configure Host parent lifecycle");
     start_parent_watch(watch_parent);
     let database_path = env::var_os("PONG_HOST_DB")
         .map(PathBuf::from)
@@ -2794,9 +2902,7 @@ async fn main() {
         schedule_run_execution(state.clone(), run_id);
     }
     let app = router(state, security);
-    let listener = bind_host_listener(watch_parent)
-        .await
-        .expect("bind host");
+    let listener = bind_host_listener(watch_parent).await.expect("bind host");
     println!("{HOST_READY_LINE}");
     io::stdout().flush().expect("flush Host startup handshake");
     axum::serve(listener, app)
@@ -2956,18 +3062,68 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            resolve_text_output(&store, canvas_id, &HashMap::new())
-                .unwrap()
-                .as_deref(),
-            Some("Hello World")
-        );
-        let runtime_values = HashMap::from([(input_id, "Runtime input".to_string())]);
+        assert!(resolve_text_output(&store, canvas_id, &HashMap::new()).is_err());
+        let runtime_values =
+            HashMap::from([(input_output_id, RuntimeValue::text("Runtime input"))]);
         assert_eq!(
             resolve_text_output(&store, canvas_id, &runtime_values)
                 .unwrap()
                 .as_deref(),
             Some("Runtime input")
+        );
+    }
+
+    #[test]
+    fn legacy_node_values_migrate_to_typed_output_ports() {
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let node = CanvasNode {
+            id: node_id,
+            canvas_id,
+            name: "Text Input".to_string(),
+            kind: "input.text".to_string(),
+            ports: default_ports(node_id, "input.text"),
+            config: serde_json::Map::new(),
+        };
+        let text_port_id = output_port_id(&node, "Text").unwrap();
+        let mut run_json = serde_json::json!({
+            "id": run_id,
+            "canvasId": canvas_id,
+            "revision": 1,
+            "status": "succeeded",
+            "startedAt": now(),
+            "finishedAt": now(),
+            "completedNodeIds": [node_id],
+            "nodeValues": {}
+        });
+        run_json["nodeValues"]
+            .as_object_mut()
+            .unwrap()
+            .insert(node_id.to_string(), serde_json::json!("Legacy input"));
+        let run: Run = serde_json::from_value(run_json).unwrap();
+        let store = Store::from(Snapshot {
+            snapshot_version: 1,
+            workspaces: Vec::new(),
+            canvases: Vec::new(),
+            nodes: vec![node],
+            edges: Vec::new(),
+            revisions: Vec::new(),
+            runs: vec![run],
+            notifications: Vec::new(),
+        });
+        let migrated = store.runs.get(&run_id).unwrap();
+        assert_eq!(
+            migrated.port_values.get(&text_port_id),
+            Some(&RuntimeValue::text("Legacy input"))
+        );
+        assert!(migrated.node_values.is_empty());
+
+        let emitted = serde_json::to_value(Snapshot::from(&store)).unwrap();
+        assert!(emitted["runs"][0].get("nodeValues").is_none());
+        assert_eq!(
+            emitted["runs"][0]["portValues"][text_port_id.to_string()]["type"],
+            "text"
         );
     }
 
@@ -3077,6 +3233,11 @@ mod tests {
             .find(|port| port.name == "Request")
             .unwrap()
             .id;
+        let analyze_report_port = analyze_ports
+            .iter()
+            .find(|port| port.name == "Report")
+            .unwrap()
+            .id;
         let mut store = Store::default();
         store.workspaces.insert(
             workspace_id,
@@ -3137,7 +3298,10 @@ mod tests {
             },
         );
 
-        let values = HashMap::from([(input_id, "Analyze the backend carefully".to_string())]);
+        let values = HashMap::from([(
+            input_text_port,
+            RuntimeValue::text("Analyze the backend carefully"),
+        )]);
         let result = resolve_project_analysis(&store, canvas_id, &values)
             .unwrap()
             .unwrap();
@@ -3175,10 +3339,13 @@ mod tests {
             HostRunAdvance::Succeeded {
                 result,
                 completed_node_ids,
-                node_values,
+                port_values,
             } => {
                 assert_eq!(completed_node_ids, vec![input_id, analyze_id]);
-                assert!(node_values.contains_key(&analyze_id));
+                assert!(matches!(
+                    port_values.get(&analyze_report_port),
+                    Some(RuntimeValue::Json { .. })
+                ));
                 let result: serde_json::Value =
                     serde_json::from_str(result.as_deref().unwrap()).unwrap();
                 assert_eq!(result["request"], "Analyze the backend carefully");
@@ -3910,13 +4077,15 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
-        assert!(state
-            .inner
-            .lock()
-            .unwrap()
-            .runs
-            .get(&started.id)
-            .is_some_and(|run| matches!(run.status, RunStatus::WaitingInput)));
+        assert!(
+            state
+                .inner
+                .lock()
+                .unwrap()
+                .runs
+                .get(&started.id)
+                .is_some_and(|run| matches!(run.status, RunStatus::WaitingInput))
+        );
 
         let submit_response = app
             .oneshot(
@@ -4559,6 +4728,7 @@ mod tests {
                 input_prompt: None,
                 result: None,
                 completed_node_ids: Vec::new(),
+                port_values: HashMap::new(),
                 node_values: HashMap::new(),
             },
         );
@@ -4762,6 +4932,7 @@ mod tests {
                 input_prompt: None,
                 result: None,
                 completed_node_ids: Vec::new(),
+                port_values: HashMap::new(),
                 node_values: HashMap::new(),
             },
         );
@@ -4802,6 +4973,7 @@ mod tests {
                 input_prompt: None,
                 result: None,
                 completed_node_ids: Vec::new(),
+                port_values: HashMap::new(),
                 node_values: HashMap::new(),
             },
         );

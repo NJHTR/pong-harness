@@ -94,6 +94,46 @@ pub enum RunStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RuntimeValue {
+    Text {
+        value: String,
+    },
+    Number {
+        value: f64,
+    },
+    Boolean {
+        value: bool,
+    },
+    Json {
+        value: serde_json::Value,
+    },
+    ArtifactRef {
+        #[serde(rename = "artifactId")]
+        artifact_id: Id,
+    },
+    ResourceRef {
+        #[serde(rename = "resourceId")]
+        resource_id: Id,
+    },
+}
+
+impl RuntimeValue {
+    pub fn text(value: impl Into<String>) -> Self {
+        Self::Text {
+            value: value.into(),
+        }
+    }
+
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text { value } => Some(value),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -112,6 +152,8 @@ pub struct Run {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub completed_node_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub port_values: std::collections::HashMap<Id, RuntimeValue>,
+    #[serde(default, rename = "nodeValues", skip_serializing)]
     pub node_values: std::collections::HashMap<Id, String>,
 }
 

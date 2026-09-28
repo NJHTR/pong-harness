@@ -11,6 +11,7 @@ export type {
   Notification,
   Run,
   RunStatus,
+  RuntimeValue,
   Workspace,
 } from "./host-wire.generated";
 

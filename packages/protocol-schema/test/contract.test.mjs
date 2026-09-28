@@ -58,3 +58,20 @@ test("invalid states, event types and commands are rejected", () => {
   assert.equal(validators.StartRunRequest(namedEntrypointRequest), true);
   assert.equal(validators.StartRunRequest({ ...namedEntrypointRequest, entrypointId: "" }), false);
 });
+
+test("runtime values are typed per port and legacy node maps are rejected", () => {
+  const legacyNodeValues = structuredClone(fixtures.snapshot);
+  legacyNodeValues.runs[0].nodeValues = { "33333333-3333-4333-8333-333333333333": "legacy" };
+  assert.equal(validators.HostSnapshot(legacyNodeValues), false);
+
+  const wrongTextType = structuredClone(fixtures.snapshot);
+  wrongTextType.runs[0].portValues["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"].value = 42;
+  assert.equal(validators.HostSnapshot(wrongTextType), false);
+
+  const artifactReference = structuredClone(fixtures.snapshot);
+  artifactReference.runs[0].portValues["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"] = {
+    type: "artifact_ref",
+    artifactId: "artifact-1",
+  };
+  assert.equal(validators.HostSnapshot(artifactReference), true);
+});
