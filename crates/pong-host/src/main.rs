@@ -2674,6 +2674,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_run_accepts_named_default_entrypoint_id() {
+        let state = test_state(test_database());
+        let canvas_id = Uuid::new_v4();
+        let start_id = Uuid::new_v4();
+        {
+            let mut store = state.inner.lock().unwrap();
+            store.canvases.insert(
+                canvas_id,
+                Canvas {
+                    id: canvas_id,
+                    workspace_id: Uuid::new_v4(),
+                    name: "Named entrypoint".to_string(),
+                    status: RunStatus::Idle,
+                    default_entrypoint_node_id: Some(start_id),
+                    revision: 0,
+                    draft_revision: 0,
+                    draft_dirty: false,
+                    updated_at: now(),
+                },
+            );
+            store.nodes.insert(
+                start_id,
+                CanvasNode {
+                    id: start_id,
+                    canvas_id,
+                    name: "Start".to_string(),
+                    kind: "trigger.start".to_string(),
+                    ports: default_ports(start_id, "trigger.start"),
+                    config: serde_json::Map::new(),
+                },
+            );
+        }
+
+        let app = router(state, test_security());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/runs"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "revision": 0,
+                            "entrypointId": format!("{canvas_id}:default"),
+                            "idempotencyKey": "named-entrypoint"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let run: Run =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(run.canvas_id, canvas_id);
+        assert_eq!(run.revision, 0);
+    }
+
+    #[tokio::test]
     async fn graph_commands_reject_invalid_and_duplicate_edges() {
         let state = test_state(test_database());
         let canvas_id = Uuid::new_v4();
