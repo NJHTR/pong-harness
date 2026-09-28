@@ -8,6 +8,7 @@ license.workspace = true
 axum = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 pong-core = { path = "../pong-core" }
+seekwd-agent-provider = { path = "../seekwd-agent-provider" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 fs2 = "0.4"
 sha2 = "0.10"

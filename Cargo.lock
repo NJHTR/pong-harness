@@ -2963,6 +2963,7 @@ dependencies = [
  "fs2",
  "pong-core",
  "rusqlite",
+ "seekwd-agent-provider",
  "serde",
  "serde_json",
  "sha2 0.10.9",
