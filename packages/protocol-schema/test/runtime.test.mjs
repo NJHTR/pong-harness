@@ -165,3 +165,50 @@ test("execution plan compilation produces deterministic graph VM instructions", 
   assert.equal(compiled.plan?.effectSummary.hasExternalEffects, true);
   assert.deepEqual(compiled.plan?.effectSummary.edgeKinds, ["control", "data"]);
 });
+
+test("execution plans represent subcanvas calls as explicit call instructions", () => {
+  const startOutput = port({ portId: "start-out", nodeId: "start", name: "Start", direction: "output", kind: "control", valueType: "any" });
+  const callInput = port({ portId: "call-in", nodeId: "call", name: "Start", direction: "input", kind: "control", valueType: "any", required: true });
+  const graph = {
+    schemaVersion: "1.0.0",
+    nodes: [
+      { ...node("start", [], [startOutput]), category: "trigger" },
+      {
+        ...node("call", [callInput], []),
+        category: "subcanvas",
+        config: {
+          contractId: "web.article.extractor",
+          mode: "call_and_wait",
+          implementationPolicy: "latest_compatible",
+          version: "1.0.0",
+        },
+      },
+    ],
+    edges: [{
+      edgeId: "control-edge",
+      canvasId: "canvas",
+      source: { nodeId: "start", portId: "start-out" },
+      target: { nodeId: "call", portId: "call-in" },
+      kind: "control",
+      enabled: true,
+    }],
+    entrypoints: [{
+      entrypointId: "manual",
+      name: "Manual",
+      kind: "manual",
+      targetNodeId: "start",
+      manualInvocable: true,
+      enabled: true,
+    }],
+    defaultEntrypointId: "manual",
+    triggers: [],
+  };
+
+  const compiled = compileExecutionPlan(graph, "workflow");
+  assert.equal(compiled.valid, true);
+  assert.equal(compiled.plan?.instructions.some((instruction) => instruction.op === "call_canvas"), true);
+  assert.equal(compileExecutionPlan({
+    ...graph,
+    nodes: [{ ...graph.nodes[0] }, { ...graph.nodes[1], config: {} }],
+  }, "workflow").errors[0].code, "SUBCANVAS_CONFIG_INVALID");
+});

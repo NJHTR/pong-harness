@@ -35,7 +35,11 @@ export {
 
 export type {
   CanvasDraft,
+  CanvasCallConfig,
+  CanvasCallMode,
   CanvasEntrypoint,
+  CanvasContract,
+  CanvasContractPort,
   CanvasIdentity,
   CanvasKind as RuntimeCanvasKind,
   CanvasLifecycle,
@@ -69,6 +73,7 @@ export type {
   Timestamp,
   TriggerBinding,
   RuntimeInstruction,
+  CanvasImplementationPolicy,
 } from "./runtime";
 export { compileExecutionPlan, validateGraph as validateRuntimeGraph, validateConnection as validateRuntimeConnection } from "./runtime";
 

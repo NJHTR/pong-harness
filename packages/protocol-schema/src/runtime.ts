@@ -144,6 +144,37 @@ export interface GraphDocument {
   triggers: TriggerBinding[];
 }
 
+export interface CanvasContractPort {
+  portId: Id;
+  name: string;
+  direction: PortDirection;
+  kind: PortKind;
+  valueType: PortValueType;
+  required: boolean;
+  cardinality: PortCardinality;
+  description?: string;
+}
+
+export interface CanvasContract {
+  contractId: Id;
+  version: SemVer;
+  name: string;
+  inputs: CanvasContractPort[];
+  outputs: CanvasContractPort[];
+  events: CanvasContractPort[];
+  requiredCapabilities: Id[];
+}
+
+export type CanvasCallMode = "call_and_wait" | "fire_and_continue";
+export type CanvasImplementationPolicy = "fixed" | "latest_compatible" | "preferred" | "fallback_chain";
+
+export interface CanvasCallConfig {
+  contractId: Id;
+  mode: CanvasCallMode;
+  implementationPolicy: CanvasImplementationPolicy;
+  version?: SemVer;
+}
+
 export interface CanvasIdentity {
   canvasId: Id;
   workspaceId: Id;
@@ -282,6 +313,7 @@ export interface GraphValidation {
 export type RuntimeInstruction =
   | { op: "enter"; entrypointId: Id; targetNodeId: Id }
   | { op: "dispatch_node"; nodeId: Id; definition: DefinitionRef; category: NodeCategory }
+  | { op: "call_canvas"; nodeId: Id; config: CanvasCallConfig }
   | { op: "route_data"; edgeId: Id; source: PortEndpoint; target: PortEndpoint; mapping?: MappingExpression }
   | { op: "route_control"; edgeId: Id; source: PortEndpoint; target: PortEndpoint }
   | { op: "route_event"; edgeId: Id; source: PortEndpoint; target: PortEndpoint }
@@ -484,13 +516,31 @@ export function compileExecutionPlan(graph: GraphDocument, canvasKind: CanvasKin
     }
   }
 
+  for (const nodeId of nodeOrder) {
+    const node = nodes.get(nodeId)!;
+    if (node.category !== "subcanvas") continue;
+    const config = node.config as Partial<CanvasCallConfig>;
+    if (!config.contractId || !config.mode || !config.implementationPolicy) {
+      errors.push({
+        code: "SUBCANVAS_CONFIG_INVALID",
+        message: `Subcanvas node ${node.name} must define contractId, mode and implementationPolicy.`,
+        nodeId,
+      });
+    }
+  }
+  if (errors.length) return { valid: false, errors, warnings };
+
   const routedEdges = enabledEdges
     .filter((edge) => visited.has(edge.source.nodeId) || visited.has(edge.target.nodeId))
     .sort((left, right) => left.edgeId.localeCompare(right.edgeId));
   const instructions: RuntimeInstruction[] = [{ op: "enter", entrypointId: entrypoint.entrypointId, targetNodeId: entrypoint.targetNodeId }];
   for (const nodeId of nodeOrder) {
     const node = nodes.get(nodeId)!;
-    instructions.push({ op: "dispatch_node", nodeId: node.nodeId, definition: node.definition, category: node.category });
+    if (node.category === "subcanvas") {
+      instructions.push({ op: "call_canvas", nodeId: node.nodeId, config: node.config as unknown as CanvasCallConfig });
+    } else {
+      instructions.push({ op: "dispatch_node", nodeId: node.nodeId, definition: node.definition, category: node.category });
+    }
     for (const edge of routedEdges.filter((candidate) => candidate.source.nodeId === nodeId)) {
       const instruction = edgeInstruction(edge);
       if (instruction) instructions.push(instruction);
