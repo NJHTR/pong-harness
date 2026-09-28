@@ -1662,6 +1662,7 @@ function NodeLibrary({ onAdd, onClose }: { onAdd: (name: string) => void; onClos
     { name: "Text Input", category: "Input", description: "Provide text or instructions", icon: <Type />, available: true },
     { name: "Text Output", category: "Output", description: "Display a connected text value", icon: <ArrowUpFromLine />, available: true },
     { name: "Review sources", category: "Human task", description: "Review connected sources and submit a result", icon: <Type />, available: true },
+    { name: "Workspace Scan", category: "Workspace", description: "List files and directories in the selected workspace", icon: <FolderOpen />, available: true },
     { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen />, available: false },
     { name: "Human Approval", category: "Control", description: "Preview: approval executor is not installed", icon: <Pause />, available: false },
     { name: "Event Trigger", category: "Trigger", description: "Preview: event delivery is not installed", icon: <Zap />, available: false },
@@ -1893,7 +1894,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!runtimeValidation.valid) {
     return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
   }
-  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text"]);
+  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan"]);
   const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
   if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -1929,24 +1930,27 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   for (const output of nodes.filter((node) => node.kind === "output.text")) {
     const input = output.ports.find((port) => port.name === "Input" && port.direction === "input");
     const dataEdge = edges.find((edge) => edge.targetPortId === input?.id);
-    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input to ${output.name}.Input before running.` };
+    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input or Workspace Scan to ${output.name}.Input before running.` };
     const source = nodeById.get(dataEdge.sourceNodeId);
-    if (source?.kind !== "input.text") return { valid: false, message: `${output.name} currently accepts text from Text Input nodes.` };
-    const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
-    if (!value) return { valid: false, message: `Set a value on ${source.name} before running.` };
+    if (source?.kind === "input.text") {
+      const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
+      if (!value) return { valid: false, message: `Set a value on ${source.name} before running.` };
+    } else if (source?.kind !== "workspace.scan") {
+      return { valid: false, message: `${output.name} accepts Text Input or Workspace Scan nodes.` };
+    }
   }
   return { valid: true, message: "Canvas is ready to run." };
 }
 
 function isPassiveSourceNode(node: WireNode) {
-  return node.kind === "input.text" || node.kind === "input.file";
+  return node.kind === "input.text" || node.kind === "input.file" || node.kind === "workspace.scan";
 }
 
 function nodeDefinition(node: WireNode) {
   const inputs = node.ports.filter((port) => port.direction === "input").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const outputs = node.ports.filter((port) => port.direction === "output").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
-  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
+  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
   const description = node.kind === "trigger.start"
     ? "Manual entrypoint. Starting the canvas emits a flow signal from this node."
     : node.kind === "input.text"
@@ -1959,6 +1963,8 @@ function nodeDefinition(node: WireNode) {
             ? "External event source. It can begin a named event path when the Host receives a matching event."
             : node.kind === "task.manual"
               ? "Manual review task. It receives connected inputs and waits for a human result; it does not call an Agent by itself."
+              : node.kind === "workspace.scan"
+                ? "Read-only workspace inventory. It lists files and directories without reading file contents."
               : node.kind === "output.text"
                 ? "Text output. It displays a value received from a connected Text Input node in Run Output."
               : "Agent task. This node requires an Agent Runtime capability before it can execute.";
@@ -1969,6 +1975,7 @@ function nodeKindForName(name: string) {
   if (name === "Text Input") return "input.text";
   if (name === "Text Output") return "output.text";
   if (name === "File Input") return "input.file";
+  if (name === "Workspace Scan") return "workspace.scan";
   if (name === "Review sources") return "task.manual";
   if (name === "Human Approval") return "control.approval";
   if (name === "Event Trigger") return "trigger.event";

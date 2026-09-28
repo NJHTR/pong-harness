@@ -125,6 +125,7 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "output.text") return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow")];
   if (kind === "control.approval") return [port(nodeId, "Request", "input", "data"), port(nodeId, "Approved", "output", "event")];
   if (kind === "trigger.event") return [port(nodeId, "Event", "output", "event")];
+  if (kind === "workspace.scan") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Artifact", "output", "resource"), port(nodeId, "Complete", "output", "event")];
 };
 const seed = (): HostSnapshot => {
