@@ -341,6 +341,50 @@ export interface ExecutionPlanCompilation {
   warnings: GraphValidation["warnings"];
 }
 
+export type RuntimeStepStatus = "succeeded" | "waiting" | "failed";
+
+export interface RuntimeNodeResult {
+  status: RuntimeStepStatus;
+  resumeToken?: string;
+  error?: string;
+}
+
+export interface RuntimeTraceEvent {
+  sequence: number;
+  instructionIndex: number;
+  op: RuntimeInstruction["op"];
+  nodeId?: Id;
+  status?: RuntimeStepStatus;
+  message?: string;
+}
+
+export interface ExecutionRuntimeHandlers {
+  dispatchNode(
+    nodeId: Id,
+    definition: DefinitionRef,
+    category: NodeCategory,
+    resumeToken?: string,
+  ): Promise<RuntimeNodeResult> | RuntimeNodeResult;
+  callCanvas(
+    nodeId: Id,
+    config: CanvasCallConfig,
+    resumeToken?: string,
+  ): Promise<RuntimeNodeResult> | RuntimeNodeResult;
+}
+
+export interface ExecutionRuntimeOptions {
+  fromInstruction?: number;
+  resumeToken?: string;
+}
+
+export interface ExecutionRuntimeResult {
+  status: RuntimeStepStatus;
+  nextInstructionIndex?: number;
+  resumeToken?: string;
+  error?: string;
+  trace: RuntimeTraceEvent[];
+}
+
 function compatibleValueTypes(source: PortValueType, target: PortValueType): boolean {
   return source === "any" || target === "any" || source === target;
 }
@@ -566,4 +610,65 @@ export function compileExecutionPlan(graph: GraphDocument, canvasKind: CanvasKin
       },
     },
   };
+}
+
+/**
+ * Execute a plan through explicit capability handlers. The runtime does not
+ * invent file, network, process, Agent or child-canvas behavior; handlers are
+ * the only place where those effects may occur.
+ */
+export async function executeExecutionPlan(
+  plan: ExecutionPlan,
+  handlers: ExecutionRuntimeHandlers,
+  options: ExecutionRuntimeOptions = {},
+): Promise<ExecutionRuntimeResult> {
+  const trace: RuntimeTraceEvent[] = [];
+  let sequence = 0;
+  const fromInstruction = options.fromInstruction ?? 0;
+  const record = (event: Omit<RuntimeTraceEvent, "sequence">) => {
+    trace.push({ sequence: sequence++, ...event });
+  };
+
+  for (let index = fromInstruction; index < plan.instructions.length; index += 1) {
+    const instruction = plan.instructions[index];
+    if (instruction.op === "enter") {
+      record({ instructionIndex: index, op: instruction.op, nodeId: instruction.targetNodeId, status: "succeeded", message: `Entered ${instruction.entrypointId}.` });
+      continue;
+    }
+    if (instruction.op === "dispatch_node") {
+      const result = await handlers.dispatchNode(instruction.nodeId, instruction.definition, instruction.category, index === fromInstruction ? options.resumeToken : undefined);
+      record({ instructionIndex: index, op: instruction.op, nodeId: instruction.nodeId, status: result.status, message: result.error });
+      if (result.status !== "succeeded") {
+        return {
+          status: result.status,
+          nextInstructionIndex: index,
+          ...(result.resumeToken ? { resumeToken: result.resumeToken } : {}),
+          ...(result.error ? { error: result.error } : {}),
+          trace,
+        };
+      }
+      continue;
+    }
+    if (instruction.op === "call_canvas") {
+      const result = await handlers.callCanvas(instruction.nodeId, instruction.config, index === fromInstruction ? options.resumeToken : undefined);
+      record({ instructionIndex: index, op: instruction.op, nodeId: instruction.nodeId, status: result.status, message: result.error });
+      if (result.status !== "succeeded") {
+        return {
+          status: result.status,
+          nextInstructionIndex: index,
+          ...(result.resumeToken ? { resumeToken: result.resumeToken } : {}),
+          ...(result.error ? { error: result.error } : {}),
+          trace,
+        };
+      }
+      continue;
+    }
+    if (instruction.op === "return") {
+      record({ instructionIndex: index, op: instruction.op, status: "succeeded", message: `Returned from ${instruction.nodeIds.length} node(s).` });
+      return { status: "succeeded", trace };
+    }
+    record({ instructionIndex: index, op: instruction.op, status: "succeeded" });
+  }
+
+  return { status: "succeeded", trace };
 }

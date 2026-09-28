@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileExecutionPlan, validateConnection, validateGraph } from "../src/runtime.ts";
+import { compileExecutionPlan, executeExecutionPlan, validateConnection, validateGraph } from "../src/runtime.ts";
 
 const port = (overrides = {}) => ({
   portId: overrides.portId ?? "port",
@@ -211,4 +211,48 @@ test("execution plans represent subcanvas calls as explicit call instructions", 
     ...graph,
     nodes: [{ ...graph.nodes[0] }, { ...graph.nodes[1], config: {} }],
   }, "workflow").errors[0].code, "SUBCANVAS_CONFIG_INVALID");
+});
+
+test("execution runtime pauses and resumes through injected handlers", async () => {
+  const output = port({ portId: "output", nodeId: "output", direction: "output", kind: "data", valueType: "text" });
+  const graph = {
+    schemaVersion: "1.0.0",
+    nodes: [{ ...node("output", [], [output]), category: "tool" }],
+    edges: [],
+    entrypoints: [{
+      entrypointId: "manual",
+      name: "Manual",
+      kind: "manual",
+      targetNodeId: "output",
+      manualInvocable: true,
+      enabled: true,
+    }],
+    defaultEntrypointId: "manual",
+    triggers: [],
+  };
+  const compiled = compileExecutionPlan(graph, "workflow");
+  assert.equal(compiled.valid, true);
+
+  let calls = 0;
+  const first = await executeExecutionPlan(compiled.plan, {
+    dispatchNode: () => {
+      calls += 1;
+      return { status: "waiting", resumeToken: "node-token" };
+    },
+    callCanvas: () => ({ status: "succeeded" }),
+  });
+  assert.equal(first.status, "waiting");
+  assert.equal(first.nextInstructionIndex, 1);
+  assert.equal(first.resumeToken, "node-token");
+  assert.equal(calls, 1);
+
+  const resumed = await executeExecutionPlan(compiled.plan, {
+    dispatchNode: (_nodeId, _definition, _category, resumeToken) => {
+      assert.equal(resumeToken, "node-token");
+      return { status: "succeeded" };
+    },
+    callCanvas: () => ({ status: "succeeded" }),
+  }, { fromInstruction: first.nextInstructionIndex, resumeToken: first.resumeToken });
+  assert.equal(resumed.status, "succeeded");
+  assert.equal(resumed.trace.at(-1).op, "return");
 });

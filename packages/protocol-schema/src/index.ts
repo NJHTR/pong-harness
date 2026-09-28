@@ -51,6 +51,9 @@ export type {
   EntrypointKind as RuntimeEntrypointKind,
   ExecutionPlan,
   ExecutionPlanCompilation,
+  ExecutionRuntimeHandlers,
+  ExecutionRuntimeOptions,
+  ExecutionRuntimeResult,
   GraphDocument,
   GraphPort as RuntimeGraphPort,
   GraphValidation,
@@ -73,9 +76,12 @@ export type {
   Timestamp,
   TriggerBinding,
   RuntimeInstruction,
+  RuntimeNodeResult,
+  RuntimeStepStatus,
+  RuntimeTraceEvent,
   CanvasImplementationPolicy,
 } from "./runtime";
-export { compileExecutionPlan, validateGraph as validateRuntimeGraph, validateConnection as validateRuntimeConnection } from "./runtime";
+export { compileExecutionPlan, executeExecutionPlan, validateGraph as validateRuntimeGraph, validateConnection as validateRuntimeConnection } from "./runtime";
 
 import type { CanvasPort, SaveRevisionRequest, StartRunRequest, SubmitRunInputRequest, UpdateNodeRequest } from "./host-wire.generated";
 
