@@ -128,6 +128,7 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "trigger.event") return [port(nodeId, "Event", "output", "event")];
   if (kind === "workspace.scan") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   if (kind === "workspace.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Request", "input", "data"), port(nodeId, "Report", "output", "data"), port(nodeId, "Complete", "output", "flow")];
+  if (kind === "file.read_text") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Path", "input", "data"), port(nodeId, "Content", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Artifact", "output", "resource"), port(nodeId, "Complete", "output", "event")];
 };
 const valueOutputPort = (node: CanvasNode | undefined) => {

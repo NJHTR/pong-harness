@@ -19,6 +19,7 @@ import {
   Database,
   ExternalLink,
   FileCode2,
+  FileText,
   FileSearch,
   Folder,
   FolderOpen,
@@ -1731,6 +1732,7 @@ function NodeLibrary({ onAdd, onClose }: { onAdd: (name: string) => void; onClos
     { name: "Review sources", category: "Human task", description: "Review connected sources and submit a result", icon: <Type />, available: true },
     { name: "Workspace Scan", category: "Workspace", description: "List files and directories in the selected workspace", icon: <FolderOpen />, available: true },
     { name: "Project Analyze", category: "Workspace", description: "Inspect project structure, manifests, languages, tests, and entrypoints", icon: <FileSearch />, available: true },
+    { name: "Read Text File", category: "Workspace", description: "Read one UTF-8 text file inside the selected workspace", icon: <FileText />, available: true },
     { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen />, available: false },
     { name: "Human Approval", category: "Control", description: "Preview: approval executor is not installed", icon: <Pause />, available: false },
     { name: "Event Trigger", category: "Trigger", description: "Preview: event delivery is not installed", icon: <Zap />, available: false },
@@ -1847,13 +1849,14 @@ function NodeInspector({ node, canvas, configDraft, onAddPort, onDeleteNode, onF
   const isInput = node.kind === "input.text" || node.kind === "input.file";
   const inputValue = typeof configDraft?.inputValue === "string" ? configDraft.inputValue : typeof node.config?.inputValue === "string" ? node.config.inputValue : "";
   const instruction = typeof configDraft?.instruction === "string" ? configDraft.instruction : typeof node.config?.instruction === "string" ? node.config.instruction : "";
+  const filePath = typeof configDraft?.path === "string" ? configDraft.path : typeof node.config?.path === "string" ? node.config.path : "";
   const updateConfig = (config: Record<string, unknown>) => onUpdateNode?.(node.id, { config });
   return (
     <>
       <PanelHeader title="Inspector" trailing={<Menu label="Node actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Delete node", icon: <Trash2 />, onSelect: () => onDeleteNode?.() }]} />} />
       <div className="inspector-summary"><span className="summary-icon">{definition.icon}</span><span><strong>{node.name}</strong><small>{definition.typeLabel}</small></span></div>
       <InspectorSection title="General"><PropertyRow label="Name"><TextField value={node.name} readOnly aria-label="Node name" /></PropertyRow><PropertyRow label="Kind"><code className="inspector-code">{node.kind}</code></PropertyRow></InspectorSection>
-      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is the single manual entrypoint. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}</InspectorSection>
+      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is the single manual entrypoint. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "file.read_text" ? <PropertyRow label="Relative path"><TextField aria-label="Workspace-relative file path" value={filePath} placeholder="src/main/java/App.java" onChange={(event) => updateConfig({ path: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}</InspectorSection>
       <InspectorSection title="Execution"><PropertyRow label="Canvas"><span className="value-select">{canvas?.name ?? "Unknown"}</span></PropertyRow><Switch label="Repair on failure" description="Allow structured repair proposals for this node." defaultChecked /></InspectorSection>
       <InspectorSection title="Ports" action={onAddPort ? <IconButton label="Add port" size="small" onClick={onAddPort}><Plus /></IconButton> : undefined}>{node.ports.map((port) => <div className="port-row" key={port.id}><span className={`port-direction is-${port.direction}`} aria-hidden="true">{port.direction === "input" ? <ArrowDownToLine /> : <ArrowUpFromLine />}</span><span>{port.name}</span><code>{port.direction} · {port.kind}</code></div>)}{!node.ports.length ? <span className="inspector-muted">No ports configured.</span> : null}</InspectorSection>
       {onDeleteNode ? <div className="inspector-danger-action"><Button variant="danger" leadingIcon={<Trash2 />} onClick={onDeleteNode}>Delete node</Button></div> : null}
@@ -1875,7 +1878,7 @@ function RunPanel({ run, canvas, nodes, value, onValueChange, onSubmit }: { run?
   return (
     <div className={`run-panel ${run?.status === "waiting_input" ? "is-waiting" : ""}`}>
       <PanelHeader title="Run output" trailing={<Toolbar><span className="run-context-label">{canvas?.name ?? "No canvas"}</span><StatusBadge tone={status === "success" ? "success" : status === "error" ? "danger" : status === "waiting" ? "warning" : "info"} dot>{run?.status ?? "No run"}</StatusBadge><IconButton label="Run actions" size="small"><MoreHorizontal /></IconButton></Toolbar>} />
-      <div className="run-content"><div className="run-tabs"><button className="is-active">Run</button><button disabled>Logs</button><button disabled>Issues</button></div><div className="run-events">{run ? <><p className="run-disclosure">{run.status === "waiting_input" ? "The local Host reached the next interactive node. Submit its value to continue the graph." : "This run is executed by the local restricted Host. Runtime input, text output, workspace scan, and structural project analysis are supported."}</p>{run.status === "waiting_input" ? <div className="run-input-card"><strong>{currentNode?.name ?? "Input required"}</strong><span>{run.inputPrompt ?? "Enter a result for the current node."}</span><AutoGrowTextArea aria-label="Node result" maxHeight={120} value={value} onChange={(event) => onValueChange(event.target.value)} placeholder="Enter the value or decision..." /><Button variant="primary" leadingIcon={<ArrowUp />} onClick={onSubmit} disabled={!value.trim()}>Submit value</Button></div> : null}{run.status === "succeeded" && run.result ? <div className="run-result-card"><strong>Output</strong><pre>{run.result}</pre></div> : null}{run.status === "failed" && run.inputPrompt ? <div className="run-error-card"><strong>Run failed</strong><span>{run.inputPrompt}</span></div> : null}<dl className="run-details"><div><dt>Run ID</dt><dd>{run.id}</dd></div><div><dt>Canvas</dt><dd>{canvas?.name ?? "Unknown"}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>Current node</dt><dd>{currentNode?.name ?? (run.status === "succeeded" ? "Completed" : "Preparing")}</dd></div><div><dt>Started</dt><dd>{new Date(run.startedAt).toLocaleString()}</dd></div><div><dt>Finished</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : "In progress"}</dd></div></dl></> : <p className="run-empty">No Host run has been started.</p>}</div></div>
+      <div className="run-content"><div className="run-tabs"><button className="is-active">Run</button><button disabled>Logs</button><button disabled>Issues</button></div><div className="run-events">{run ? <><p className="run-disclosure">{run.status === "waiting_input" ? "The local Host reached the next interactive node. Submit its value to continue the graph." : "This run is executed by the local restricted Host. Runtime input, text output, bounded workspace scans, structural project analysis, and explicit workspace file reads are supported."}</p>{run.status === "waiting_input" ? <div className="run-input-card"><strong>{currentNode?.name ?? "Input required"}</strong><span>{run.inputPrompt ?? "Enter a result for the current node."}</span><AutoGrowTextArea aria-label="Node result" maxHeight={120} value={value} onChange={(event) => onValueChange(event.target.value)} placeholder="Enter the value or decision..." /><Button variant="primary" leadingIcon={<ArrowUp />} onClick={onSubmit} disabled={!value.trim()}>Submit value</Button></div> : null}{run.status === "succeeded" && run.result ? <div className="run-result-card"><strong>Output</strong><pre>{run.result}</pre></div> : null}{run.status === "failed" && run.inputPrompt ? <div className="run-error-card"><strong>Run failed</strong><span>{run.inputPrompt}</span></div> : null}<dl className="run-details"><div><dt>Run ID</dt><dd>{run.id}</dd></div><div><dt>Canvas</dt><dd>{canvas?.name ?? "Unknown"}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>Current node</dt><dd>{currentNode?.name ?? (run.status === "succeeded" ? "Completed" : "Preparing")}</dd></div><div><dt>Started</dt><dd>{new Date(run.startedAt).toLocaleString()}</dd></div><div><dt>Finished</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : "In progress"}</dd></div></dl></> : <p className="run-empty">No Host run has been started.</p>}</div></div>
     </div>
   );
 }
@@ -1962,7 +1965,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!runtimeValidation.valid) {
     return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
   }
-  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze"]);
+  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze", "file.read_text"]);
   const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
   if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -1995,10 +1998,21 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       message: `Connect ${unreachable.name} to the selected entrypoint flow path before running.`,
     };
   }
+  for (const reader of nodes.filter((node) => node.kind === "file.read_text")) {
+    const pathPort = reader.ports.find((port) => port.name === "Path" && port.direction === "input");
+    const connectedPath = edges.some((edge) => edge.targetPortId === pathPort?.id);
+    const configuredPath = typeof reader.config?.path === "string" ? reader.config.path.trim() : "";
+    if (!connectedPath && !configuredPath) {
+      return {
+        valid: false,
+        message: `Set a workspace-relative path on ${reader.name}, or connect a Text Input to its Path port.`,
+      };
+    }
+  }
   for (const output of nodes.filter((node) => node.kind === "output.text")) {
     const input = output.ports.find((port) => port.name === "Input" && port.direction === "input");
     const dataEdge = edges.find((edge) => edge.targetPortId === input?.id);
-    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input, Workspace Scan, or Project Analyze node to ${output.name}.Input before running.` };
+    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input, Workspace Scan, Project Analyze, or Read Text File node to ${output.name}.Input before running.` };
     const source = nodeById.get(dataEdge.sourceNodeId);
     if (source?.kind === "input.text") {
       const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
@@ -2008,8 +2022,8 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       if (!value && source.id !== canvas.defaultEntrypointNodeId) {
         return { valid: false, message: `Set a value on ${source.name} before running, or make it the canvas entrypoint.` };
       }
-    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze") {
-      return { valid: false, message: `${output.name} accepts Text Input, Workspace Scan, or Project Analyze nodes.` };
+    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze" && source?.kind !== "file.read_text") {
+      return { valid: false, message: `${output.name} accepts Text Input, Workspace Scan, Project Analyze, or Read Text File nodes.` };
     }
   }
   return { valid: true, message: "Canvas is ready to run." };
@@ -2022,8 +2036,8 @@ function isPassiveSourceNode(node: WireNode) {
 function nodeDefinition(node: WireNode) {
   const inputs = node.ports.filter((port) => port.direction === "input").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const outputs = node.ports.filter((port) => port.direction === "output").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
-  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind === "workspace.analyze" ? <FileSearch /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
-  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
+  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind === "workspace.analyze" ? <FileSearch /> : node.kind === "file.read_text" ? <FileText /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
+  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind === "file.read_text" ? "Text file reader" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
   const description = node.kind === "trigger.start"
     ? "Manual entrypoint. Starting the canvas emits a flow signal from this node."
     : node.kind === "input.text"
@@ -2040,6 +2054,8 @@ function nodeDefinition(node: WireNode) {
                 ? "Read-only workspace inventory. It lists files and directories without reading file contents."
               : node.kind === "workspace.analyze"
                 ? "Read-only structural project analysis. It inspects manifests, file types, tests, and likely entrypoints inside the selected workspace."
+              : node.kind === "file.read_text"
+                ? "Read one UTF-8 text file by workspace-relative path. Absolute paths, parent traversal, symbolic links, and files over the configured limit are rejected."
               : node.kind === "output.text"
                 ? "Text output. It displays a value received from a connected Text Input node in Run Output."
               : "Agent task. This node requires an Agent Runtime capability before it can execute.";
@@ -2052,6 +2068,7 @@ function nodeKindForName(name: string) {
   if (name === "File Input") return "input.file";
   if (name === "Workspace Scan") return "workspace.scan";
   if (name === "Project Analyze") return "workspace.analyze";
+  if (name === "Read Text File") return "file.read_text";
   if (name === "Review sources") return "task.manual";
   if (name === "Human Approval") return "control.approval";
   if (name === "Event Trigger") return "trigger.event";

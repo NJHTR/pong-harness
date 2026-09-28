@@ -21,7 +21,7 @@ use std::{
     env,
     fs::{File, OpenOptions, read_dir},
     io::{self, Read, Write},
-    path::{Path as FsPath, PathBuf},
+    path::{Component, Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -1052,6 +1052,7 @@ fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static 
         "output.text",
         "workspace.scan",
         "workspace.analyze",
+        "file.read_text",
     ];
     if nodes
         .iter()
@@ -1196,6 +1197,7 @@ fn primary_value_output_port_id(node: &CanvasNode) -> Option<Uuid> {
         "input.file" => "File",
         "workspace.scan" => "Result",
         "workspace.analyze" => "Report",
+        "file.read_text" => "Content",
         _ => "Result",
     };
     output_port_id(node, preferred_name).or_else(|| {
@@ -1444,6 +1446,83 @@ fn read_bounded_text(path: &FsPath, max_bytes: u64) -> Result<String, String> {
         .read_to_string(&mut content)
         .map_err(|error| format!("Unable to read {} as UTF-8 text: {error}", path.display()))?;
     Ok(content)
+}
+
+fn resolve_file_read(
+    store: &Store,
+    canvas_id: Uuid,
+    node: &CanvasNode,
+    port_values: &HashMap<Uuid, RuntimeValue>,
+) -> Result<String, String> {
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .ok_or_else(|| "Canvas was not found".to_string())?;
+    let workspace = store
+        .workspaces
+        .get(&canvas.workspace_id)
+        .ok_or_else(|| "Workspace was not found".to_string())?;
+    let requested = connected_text_value(store, canvas_id, node, "Path", port_values)
+        .or_else(|| {
+            node.config
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            "Read Text File requires a workspace-relative Path input or path configuration"
+                .to_string()
+        })?;
+    let requested_path = FsPath::new(&requested);
+    if requested_path.is_absolute() {
+        return Err("Read Text File only accepts workspace-relative paths".to_string());
+    }
+    let root = FsPath::new(&workspace.path);
+    if !root.is_dir() {
+        return Err(format!(
+            "Workspace path is not an accessible directory: {}",
+            root.display()
+        ));
+    }
+    let canonical_root = std::fs::canonicalize(root)
+        .map_err(|error| format!("Unable to resolve workspace path: {error}"))?;
+    let mut target = canonical_root.clone();
+    for component in requested_path.components() {
+        match component {
+            Component::Normal(segment) => {
+                target.push(segment);
+                let metadata = std::fs::symlink_metadata(&target)
+                    .map_err(|error| format!("Unable to inspect {}: {error}", target.display()))?;
+                if metadata.file_type().is_symlink() {
+                    return Err("Read Text File does not follow symbolic links".to_string());
+                }
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("Read Text File paths cannot leave the selected workspace".to_string());
+            }
+        }
+    }
+    let canonical_target = std::fs::canonicalize(&target)
+        .map_err(|error| format!("Unable to resolve {}: {error}", target.display()))?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Read Text File resolved outside the selected workspace".to_string());
+    }
+    if !canonical_target.is_file() {
+        return Err(format!(
+            "Read Text File requires a regular file: {}",
+            canonical_target.display()
+        ));
+    }
+    let max_bytes = node
+        .config
+        .get("maxBytes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(256 * 1024)
+        .clamp(1, 1024 * 1024);
+    read_bounded_text(&canonical_target, max_bytes)
 }
 
 fn xml_tag(content: &str, tag: &str) -> Option<String> {
@@ -1988,6 +2067,14 @@ fn advance_host_execution(
                 port_values.insert(port_id, RuntimeValue::Json { value: json });
                 final_result = Some(value);
             }
+            "file.read_text" => {
+                let value = resolve_file_read(&store, canvas_id, node, &port_values)?;
+                let port_id = output_port_id(node, "Content").ok_or_else(|| {
+                    "Read Text File is missing its Content output port".to_string()
+                })?;
+                port_values.insert(port_id, RuntimeValue::text(value.clone()));
+                final_result = Some(value);
+            }
             "output.text" => {
                 let value = resolve_output_node(&store, canvas_id, node, &port_values)?;
                 final_result = Some(value);
@@ -2246,6 +2333,12 @@ fn default_ports(node_id: Uuid, kind: &str) -> Vec<CanvasPort> {
             port(node_id, "Start", PortDirection::Input, PortKind::Flow),
             port(node_id, "Request", PortDirection::Input, PortKind::Data),
             port(node_id, "Report", PortDirection::Output, PortKind::Data),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
+        ],
+        "file.read_text" => vec![
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "Path", PortDirection::Input, PortKind::Data),
+            port(node_id, "Content", PortDirection::Output, PortKind::Data),
             port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
         ],
         _ => vec![
@@ -3412,6 +3505,138 @@ mod tests {
                 .all(|item| !item.as_str().unwrap().contains("node_modules"))
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn text_file_reader_is_bounded_to_the_workspace() {
+        let root = std::env::temp_dir().join(format!("pong-host-file-read-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("app.txt"), "hello from workspace").unwrap();
+        let outside = root
+            .parent()
+            .unwrap()
+            .join(format!("pong-host-outside-{}.txt", Uuid::new_v4()));
+        std::fs::write(&outside, "outside").unwrap();
+
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let ports = default_ports(node_id, "file.read_text");
+        let content_port = ports.iter().find(|port| port.name == "Content").unwrap().id;
+        let mut config = serde_json::Map::new();
+        config.insert("path".to_string(), serde_json::json!("src/app.txt"));
+        let mut store = Store::default();
+        store.workspaces.insert(
+            workspace_id,
+            Workspace {
+                id: workspace_id,
+                name: "Read Workspace".to_string(),
+                path: root.to_string_lossy().to_string(),
+                updated_at: now(),
+            },
+        );
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id,
+                name: "Read".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(node_id),
+                revision: 1,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        store.nodes.insert(
+            node_id,
+            CanvasNode {
+                id: node_id,
+                canvas_id,
+                name: "Read Text File".to_string(),
+                kind: "file.read_text".to_string(),
+                ports,
+                config,
+            },
+        );
+
+        let node = store.nodes.get(&node_id).unwrap();
+        assert_eq!(
+            resolve_file_read(&store, canvas_id, node, &HashMap::new()).unwrap(),
+            "hello from workspace"
+        );
+        let plan = build_run_plan_snapshot(&store, canvas_id).unwrap();
+        match advance_host_execution(&store, canvas_id, &plan, 0, &[], &HashMap::new()).unwrap() {
+            HostRunAdvance::Succeeded {
+                result,
+                port_values,
+                ..
+            } => {
+                assert_eq!(result.as_deref(), Some("hello from workspace"));
+                assert_eq!(
+                    port_values.get(&content_port),
+                    Some(&RuntimeValue::text("hello from workspace"))
+                );
+            }
+            HostRunAdvance::Waiting { .. } => panic!("configured file reads do not wait"),
+        }
+
+        store
+            .nodes
+            .get_mut(&node_id)
+            .unwrap()
+            .config
+            .insert("path".to_string(), serde_json::json!("../outside.txt"));
+        assert!(
+            resolve_file_read(
+                &store,
+                canvas_id,
+                store.nodes.get(&node_id).unwrap(),
+                &HashMap::new(),
+            )
+            .unwrap_err()
+            .contains("cannot leave")
+        );
+        store.nodes.get_mut(&node_id).unwrap().config.insert(
+            "path".to_string(),
+            serde_json::json!(outside.to_string_lossy()),
+        );
+        assert!(
+            resolve_file_read(
+                &store,
+                canvas_id,
+                store.nodes.get(&node_id).unwrap(),
+                &HashMap::new(),
+            )
+            .unwrap_err()
+            .contains("workspace-relative")
+        );
+        store
+            .nodes
+            .get_mut(&node_id)
+            .unwrap()
+            .config
+            .insert("path".to_string(), serde_json::json!("src/app.txt"));
+        store
+            .nodes
+            .get_mut(&node_id)
+            .unwrap()
+            .config
+            .insert("maxBytes".to_string(), serde_json::json!(4));
+        assert!(
+            resolve_file_read(
+                &store,
+                canvas_id,
+                store.nodes.get(&node_id).unwrap(),
+                &HashMap::new(),
+            )
+            .unwrap_err()
+            .contains("exceeds")
+        );
+
+        std::fs::remove_file(outside).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 
