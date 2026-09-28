@@ -665,14 +665,18 @@ function App({ client }: { client: HostClient }) {
       const input = await client.createNode({ canvasId: canvas.id, name: "Analysis Request", kind: "input.text" });
       const analyze = await client.createNode({ canvasId: canvas.id, name: "Project Analyze", kind: "workspace.analyze" });
       const agentConfigured = agentKeyConfigured && Boolean(agentSettings.endpoint.trim()) && Boolean(agentSettings.model.trim());
+      const context = agentConfigured
+        ? await client.createNode({ canvasId: canvas.id, name: "Build Project Context", kind: "workspace.context" })
+        : undefined;
       const agent = agentConfigured
         ? await client.createNode({ canvasId: canvas.id, name: "Agent Analyze", kind: "agent.analyze" })
         : undefined;
       const output = await client.createNode({ canvasId: canvas.id, name: "Analysis Report", kind: "output.text" });
       await client.updateNode({ nodeId: input.id, config: { inputValue: request, position: { x: 70, y: 170 } } });
       await client.updateNode({ nodeId: analyze.id, config: { maxEntries: 5000, maxDepth: 16, position: { x: 390, y: 170 } } });
-      if (agent) await client.updateNode({ nodeId: agent.id, config: configuredAgentNode({ x: 730, y: 170 }) });
-      await client.updateNode({ nodeId: output.id, config: { position: { x: agent ? 1070 : 730, y: 170 } } });
+      if (context) await client.updateNode({ nodeId: context.id, config: { maxFiles: 8, maxBytesPerFile: 16384, maxTotalBytes: 131072, maxEntries: 5000, maxDepth: 16, position: { x: 710, y: 170 } } });
+      if (agent) await client.updateNode({ nodeId: agent.id, config: configuredAgentNode({ x: 1030, y: 170 }) });
+      await client.updateNode({ nodeId: output.id, config: { position: { x: agent ? 1350 : 730, y: 170 } } });
 
       const connect = async (
         source: WireNode,
@@ -695,10 +699,13 @@ function App({ client }: { client: HostClient }) {
       };
       await connect(input, "Text", analyze, "Request", "data");
       await connect(input, "Complete", analyze, "Start", "flow");
-      if (agent) {
+      if (agent && context) {
+        await connect(input, "Text", context, "Request", "data");
+        await connect(analyze, "Report", context, "Structure", "data");
+        await connect(analyze, "Complete", context, "Start", "flow");
         await connect(input, "Text", agent, "Goal", "data");
-        await connect(analyze, "Report", agent, "Context", "data");
-        await connect(analyze, "Complete", agent, "Start", "flow");
+        await connect(context, "Context", agent, "Context", "data");
+        await connect(context, "Complete", agent, "Start", "flow");
         await connect(agent, "Result", output, "Input", "data");
         await connect(agent, "Complete", output, "Start", "flow");
       } else {
@@ -720,7 +727,13 @@ function App({ client }: { client: HostClient }) {
       setSelectedNodeId(input.id);
       setRunPanelOpen(true);
       setSurface("canvas");
-      showNotice("Project analysis started", `${canvas.name} is inspecting ${activeWorkspace.name} through the local restricted Host.`, "info");
+      showNotice(
+        "Project analysis started",
+        agent
+          ? `${canvas.name} is building a bounded, secret-filtered source context before the configured Agent runs.`
+          : `${canvas.name} is inspecting ${activeWorkspace.name} through the local restricted Host.`,
+        "info",
+      );
     } catch (error) {
       reportError(error, "Unable to create the project analysis workflow");
     }
@@ -1803,6 +1816,7 @@ function NodeLibrary({ onAdd, onClose }: { onAdd: (name: string) => void; onClos
     { name: "Review sources", category: "Human task", description: "Review connected sources and submit a result", icon: <Type />, available: true },
     { name: "Workspace Scan", category: "Workspace", description: "List files and directories in the selected workspace", icon: <FolderOpen />, available: true },
     { name: "Project Analyze", category: "Workspace", description: "Inspect project structure, manifests, languages, tests, and entrypoints", icon: <FileSearch />, available: true },
+    { name: "Build Project Context", category: "Workspace", description: "Select bounded source excerpts for an explicit downstream analysis", icon: <FileCode2 />, available: true },
     { name: "Read Text File", category: "Workspace", description: "Read one UTF-8 text file inside the selected workspace", icon: <FileText />, available: true },
     { name: "Agent Analyze", category: "Agent", description: "Analyze an explicitly connected goal and context with the configured model", icon: <Bot />, available: true },
     { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen />, available: false },
@@ -1926,13 +1940,16 @@ function NodeInspector({ node, canvas, configDraft, onAddPort, onDeleteNode, onF
   const agentModel = typeof configDraft?.model === "string" ? configDraft.model : typeof node.config?.model === "string" ? node.config.model : "";
   const agentInstructions = typeof configDraft?.instructions === "string" ? configDraft.instructions : typeof node.config?.instructions === "string" ? node.config.instructions : "";
   const agentEnvironment = typeof configDraft?.environment === "string" ? configDraft.environment : typeof node.config?.environment === "string" ? node.config.environment : "Response only";
+  const contextMaxFiles = Number(configDraft?.maxFiles ?? node.config?.maxFiles ?? 8);
+  const contextMaxBytesPerFile = Number(configDraft?.maxBytesPerFile ?? node.config?.maxBytesPerFile ?? 16384);
+  const contextMaxTotalBytes = Number(configDraft?.maxTotalBytes ?? node.config?.maxTotalBytes ?? 131072);
   const updateConfig = (config: Record<string, unknown>) => onUpdateNode?.(node.id, { config });
   return (
     <>
       <PanelHeader title="Inspector" trailing={<Menu label="Node actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Delete node", icon: <Trash2 />, onSelect: () => onDeleteNode?.() }]} />} />
       <div className="inspector-summary"><span className="summary-icon">{definition.icon}</span><span><strong>{node.name}</strong><small>{definition.typeLabel}</small></span></div>
       <InspectorSection title="General"><PropertyRow label="Name"><TextField value={node.name} readOnly aria-label="Node name" /></PropertyRow><PropertyRow label="Kind"><code className="inspector-code">{node.kind}</code></PropertyRow></InspectorSection>
-      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is a manual trigger. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "file.read_text" ? <PropertyRow label="Relative path"><TextField aria-label="Workspace-relative file path" value={filePath} placeholder="src/main/java/App.java" onChange={(event) => updateConfig({ path: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "agent.analyze" ? <><PropertyRow label="Endpoint"><TextField aria-label="Agent endpoint" value={agentEndpoint} placeholder="https://api.example.com/v1" onChange={(event) => updateConfig({ provider: "openai_compatible", endpoint: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Model"><TextField aria-label="Agent model" value={agentModel} placeholder="gpt-4o-mini" onChange={(event) => updateConfig({ model: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Instructions"><TextField aria-label="Agent instructions" value={agentInstructions} placeholder="Explain findings with evidence." onChange={(event) => updateConfig({ instructions: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Environment"><label className="form-select form-select--compact"><select aria-label="Agent execution environment" value={agentEnvironment} onChange={(event) => updateConfig({ environment: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)}><option>Response only</option><option>Local Restricted (planned tools)</option><option>Workspace Read/Write (planned tools)</option></select></label></PropertyRow><p className="inspector-help">The API key is resolved from Windows Credential Manager and is never stored in this graph.</p></> : null}</InspectorSection>
+      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is a manual trigger. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "workspace.context" ? <><PropertyRow label="Max files"><TextField aria-label="Maximum project context files" type="number" value={String(contextMaxFiles)} onChange={(event) => updateConfig({ maxFiles: Number(event.target.value) })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Bytes per file"><TextField aria-label="Maximum bytes per project context file" type="number" value={String(contextMaxBytesPerFile)} onChange={(event) => updateConfig({ maxBytesPerFile: Number(event.target.value) })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Total bytes"><TextField aria-label="Maximum project context bytes" type="number" value={String(contextMaxTotalBytes)} onChange={(event) => updateConfig({ maxTotalBytes: Number(event.target.value) })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><p className="inspector-help">The Host clamps these limits and filters sensitive paths and likely secret content before producing Context.</p></> : null}{node.kind === "file.read_text" ? <PropertyRow label="Relative path"><TextField aria-label="Workspace-relative file path" value={filePath} placeholder="src/main/java/App.java" onChange={(event) => updateConfig({ path: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "agent.analyze" ? <><PropertyRow label="Endpoint"><TextField aria-label="Agent endpoint" value={agentEndpoint} placeholder="https://api.example.com/v1" onChange={(event) => updateConfig({ provider: "openai_compatible", endpoint: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Model"><TextField aria-label="Agent model" value={agentModel} placeholder="gpt-4o-mini" onChange={(event) => updateConfig({ model: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Instructions"><TextField aria-label="Agent instructions" value={agentInstructions} placeholder="Explain findings with evidence." onChange={(event) => updateConfig({ instructions: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Environment"><label className="form-select form-select--compact"><select aria-label="Agent execution environment" value={agentEnvironment} onChange={(event) => updateConfig({ environment: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)}><option>Response only</option><option>Local Restricted (planned tools)</option><option>Workspace Read/Write (planned tools)</option></select></label></PropertyRow><p className="inspector-help">The API key is resolved from Windows Credential Manager and is never stored in this graph.</p></> : null}</InspectorSection>
       <InspectorSection title="Execution"><PropertyRow label="Canvas"><span className="value-select">{canvas?.name ?? "Unknown"}</span></PropertyRow><Switch label="Repair on failure" description="Allow structured repair proposals for this node." defaultChecked /></InspectorSection>
       <InspectorSection title="Ports" action={onAddPort ? <IconButton label="Add port" size="small" onClick={onAddPort}><Plus /></IconButton> : undefined}>{node.ports.map((port) => <div className="port-row" key={port.id}><span className={`port-direction is-${port.direction}`} aria-hidden="true">{port.direction === "input" ? <ArrowDownToLine /> : <ArrowUpFromLine />}</span><span>{port.name}</span><code>{port.direction} · {port.kind}</code></div>)}{!node.ports.length ? <span className="inspector-muted">No ports configured.</span> : null}</InspectorSection>
       {onDeleteNode ? <div className="inspector-danger-action"><Button variant="danger" leadingIcon={<Trash2 />} onClick={onDeleteNode}>Delete node</Button></div> : null}
@@ -2041,7 +2058,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!runtimeValidation.valid) {
     return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
   }
-  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze", "file.read_text", "agent.analyze"]);
+  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze", "workspace.context", "file.read_text", "agent.analyze"]);
   const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
   if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -2113,6 +2130,13 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       return { valid: false, message: `Configure the endpoint and model on ${agent.name} before running.` };
     }
   }
+  for (const context of nodes.filter((node) => node.kind === "workspace.context")) {
+    const requestPort = context.ports.find((port) => port.name === "Request" && port.direction === "input");
+    const requestEdge = edges.find((edge) => edge.targetPortId === requestPort?.id);
+    if (!requestPort || !requestEdge) {
+      return { valid: false, message: `Connect an explicit analysis goal to ${context.name}.Request before running.` };
+    }
+  }
   for (const output of nodes.filter((node) => node.kind === "output.text")) {
     const input = output.ports.find((port) => port.name === "Input" && port.direction === "input");
     const dataEdge = edges.find((edge) => edge.targetPortId === input?.id);
@@ -2126,7 +2150,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       if (!value && source.id !== canvas.defaultEntrypointNodeId) {
         return { valid: false, message: `Set a value on ${source.name} before running, or make it the canvas entrypoint.` };
       }
-    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze" && source?.kind !== "file.read_text" && source?.kind !== "agent.analyze") {
+    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze" && source?.kind !== "workspace.context" && source?.kind !== "file.read_text" && source?.kind !== "agent.analyze") {
       return { valid: false, message: `${output.name} requires a connected runtime value source.` };
     }
   }
@@ -2140,8 +2164,8 @@ function isPassiveSourceNode(node: WireNode) {
 function nodeDefinition(node: WireNode) {
   const inputs = node.ports.filter((port) => port.direction === "input").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const outputs = node.ports.filter((port) => port.direction === "output").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
-  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind === "workspace.analyze" ? <FileSearch /> : node.kind === "file.read_text" ? <FileText /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
-  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind === "file.read_text" ? "Text file reader" : node.kind === "agent.analyze" ? "Agent analysis" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
+  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind === "workspace.analyze" ? <FileSearch /> : node.kind === "workspace.context" ? <FileCode2 /> : node.kind === "file.read_text" ? <FileText /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
+  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind === "workspace.context" ? "Project context" : node.kind === "file.read_text" ? "Text file reader" : node.kind === "agent.analyze" ? "Agent analysis" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
   const description = node.kind === "trigger.start"
     ? "Manual entrypoint. Starting the canvas emits a flow signal from this node."
     : node.kind === "input.text"
@@ -2158,6 +2182,8 @@ function nodeDefinition(node: WireNode) {
                 ? "Read-only workspace inventory. It lists files and directories without reading file contents."
               : node.kind === "workspace.analyze"
                 ? "Read-only structural project analysis. It inspects manifests, file types, tests, and likely entrypoints inside the selected workspace."
+              : node.kind === "workspace.context"
+                ? "Build a bounded, read-only source context inside the selected workspace. Sensitive paths, likely secrets, binary files, symbolic links, build outputs, and oversized content are excluded before the Context output is produced."
               : node.kind === "file.read_text"
                 ? "Read one UTF-8 text file by workspace-relative path. Absolute paths, parent traversal, symbolic links, and files over the configured limit are rejected."
               : node.kind === "agent.analyze"
@@ -2174,6 +2200,7 @@ function nodeKindForName(name: string) {
   if (name === "File Input") return "input.file";
   if (name === "Workspace Scan") return "workspace.scan";
   if (name === "Project Analyze") return "workspace.analyze";
+  if (name === "Build Project Context") return "workspace.context";
   if (name === "Read Text File") return "file.read_text";
   if (name === "Agent Analyze") return "agent.analyze";
   if (name === "Review sources") return "task.manual";

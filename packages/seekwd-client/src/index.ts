@@ -81,7 +81,10 @@ export function toRuntimeGraphDocument(canvas: Canvas, nodes: CanvasNode[], edge
         direction: "input" as const,
         kind: runtimePortKind(port.kind),
         valueType: port.kind === "data" ? "any" : port.kind === "resource" ? "artifact" : port.kind === "event" ? "event" : "any",
-        required: !(node.kind === "agent.analyze" && port.name === "Context"),
+        required: !(
+          (node.kind === "agent.analyze" && port.name === "Context")
+          || (node.kind === "workspace.context" && port.name === "Structure")
+        ),
         cardinality: "one" as const,
       })),
       outputs: node.ports.filter((port) => port.direction === "output").map((port) => ({
@@ -128,6 +131,7 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "trigger.event") return [port(nodeId, "Event", "output", "event")];
   if (kind === "workspace.scan") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   if (kind === "workspace.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Request", "input", "data"), port(nodeId, "Report", "output", "data"), port(nodeId, "Complete", "output", "flow")];
+  if (kind === "workspace.context") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Request", "input", "data"), port(nodeId, "Structure", "input", "data"), port(nodeId, "Context", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   if (kind === "file.read_text") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Path", "input", "data"), port(nodeId, "Content", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   if (kind === "agent.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Goal", "input", "data"), port(nodeId, "Context", "input", "data"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Artifact", "output", "resource"), port(nodeId, "Complete", "output", "event")];
@@ -142,6 +146,8 @@ const valueOutputPort = (node: CanvasNode | undefined) => {
         ? "Result"
         : node.kind === "workspace.analyze"
           ? "Report"
+          : node.kind === "workspace.context"
+            ? "Context"
           : node.kind === "agent.analyze"
             ? "Result"
           : "Result";
