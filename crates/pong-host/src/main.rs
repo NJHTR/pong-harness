@@ -825,8 +825,27 @@ fn open_database(path: PathBuf) -> rusqlite::Result<(Connection, Store, u64)> {
     let file_backed = path != PathBuf::from(":memory:");
     let mut connection = Connection::open(path)?;
     initialize_database(&mut connection, file_backed)?;
-    let (store, snapshot_version) = load_persisted_state(&connection)?;
+    let (mut store, snapshot_version) = load_persisted_state(&connection)?;
+    if normalize_known_node_ports(&mut store) | normalize_run_plan_ports(&mut store) {
+        persist_migrated_snapshot(&connection, &store, snapshot_version)?;
+    }
     Ok((connection, store, snapshot_version))
+}
+
+fn persist_migrated_snapshot(
+    connection: &Connection,
+    store: &Store,
+    snapshot_version: u64,
+) -> rusqlite::Result<()> {
+    let mut snapshot = Snapshot::from(store);
+    snapshot.snapshot_version = snapshot_version;
+    let snapshot = serde_json::to_string(&snapshot)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    connection.execute(
+        "UPDATE host_state SET snapshot_json = ?1 WHERE id = 1",
+        [snapshot],
+    )?;
+    Ok(())
 }
 
 fn load_persisted_state(connection: &Connection) -> rusqlite::Result<(Store, u64)> {
@@ -2429,6 +2448,180 @@ fn port(node_id: Uuid, name: &str, direction: PortDirection, kind: PortKind) -> 
     }
 }
 
+struct PortContract {
+    name: &'static str,
+    direction: PortDirection,
+    kind: PortKind,
+    legacy_alias: Option<&'static str>,
+}
+
+fn known_port_contract(kind: &str) -> Option<Vec<PortContract>> {
+    let input = |name, kind, legacy_alias| PortContract {
+        name,
+        direction: PortDirection::Input,
+        kind,
+        legacy_alias,
+    };
+    let output = |name, kind, legacy_alias| PortContract {
+        name,
+        direction: PortDirection::Output,
+        kind,
+        legacy_alias,
+    };
+    match kind {
+        "workspace.scan" => Some(vec![
+            input("Start", PortKind::Flow, Some("Start")),
+            output("Result", PortKind::Data, Some("Result")),
+            output("Complete", PortKind::Flow, Some("Complete")),
+        ]),
+        "workspace.analyze" => Some(vec![
+            input("Start", PortKind::Flow, Some("Start")),
+            input("Request", PortKind::Data, Some("Input")),
+            output("Report", PortKind::Data, Some("Result")),
+            output("Complete", PortKind::Flow, Some("Complete")),
+        ]),
+        "file.read_text" => Some(vec![
+            input("Start", PortKind::Flow, Some("Start")),
+            input("Path", PortKind::Data, Some("Input")),
+            output("Content", PortKind::Data, Some("Result")),
+            output("Complete", PortKind::Flow, Some("Complete")),
+        ]),
+        "agent.analyze" => Some(vec![
+            input("Start", PortKind::Flow, Some("Start")),
+            input("Goal", PortKind::Data, Some("Input")),
+            input("Context", PortKind::Data, None),
+            output("Result", PortKind::Data, Some("Result")),
+            output("Complete", PortKind::Flow, Some("Complete")),
+        ]),
+        _ => None,
+    }
+}
+
+fn same_direction(left: &PortDirection, right: &PortDirection) -> bool {
+    std::mem::discriminant(left) == std::mem::discriminant(right)
+}
+
+fn same_port_kind(left: &PortKind, right: &PortKind) -> bool {
+    std::mem::discriminant(left) == std::mem::discriminant(right)
+}
+
+fn normalize_known_node_ports(store: &mut Store) -> bool {
+    let mut changed = false;
+    let mut remapped_kinds = HashMap::<Uuid, PortKind>::new();
+    let referenced_port_ids = store
+        .edges
+        .values()
+        .flat_map(|edge| [edge.source_port_id, edge.target_port_id])
+        .collect::<std::collections::HashSet<_>>();
+
+    for node in store.nodes.values_mut() {
+        let Some(contract) = known_port_contract(&node.kind) else {
+            continue;
+        };
+        let mut remaining = std::mem::take(&mut node.ports);
+        let mut normalized = Vec::with_capacity(contract.len() + remaining.len());
+        for expected in contract {
+            let exact = remaining.iter().position(|port| {
+                port.name == expected.name && same_direction(&port.direction, &expected.direction)
+            });
+            let aliased = exact.or_else(|| {
+                expected.legacy_alias.and_then(|alias| {
+                    remaining.iter().position(|port| {
+                        port.name == alias && same_direction(&port.direction, &expected.direction)
+                    })
+                })
+            });
+            let mut port = aliased
+                .map(|index| remaining.remove(index))
+                .unwrap_or_else(|| {
+                    changed = true;
+                    port(
+                        node.id,
+                        expected.name,
+                        expected.direction.clone(),
+                        expected.kind.clone(),
+                    )
+                });
+            if port.node_id != node.id
+                || port.name != expected.name
+                || !same_direction(&port.direction, &expected.direction)
+                || !same_port_kind(&port.kind, &expected.kind)
+            {
+                changed = true;
+                port.node_id = node.id;
+                port.name = expected.name.to_string();
+                port.direction = expected.direction;
+                port.kind = expected.kind.clone();
+            }
+            remapped_kinds.insert(port.id, expected.kind);
+            normalized.push(port);
+        }
+        let before = remaining.len();
+        remaining.retain(|port| {
+            referenced_port_ids.contains(&port.id)
+                || !matches!(
+                    port.name.as_str(),
+                    "Input" | "Result" | "Artifact" | "Complete" | "Start"
+                )
+        });
+        if remaining.len() != before {
+            changed = true;
+        }
+        normalized.extend(remaining);
+        node.ports = normalized;
+    }
+
+    for edge in store.edges.values_mut() {
+        let expected = remapped_kinds
+            .get(&edge.source_port_id)
+            .or_else(|| remapped_kinds.get(&edge.target_port_id));
+        if let Some(expected) = expected
+            && !same_port_kind(&edge.kind, expected)
+        {
+            edge.kind = expected.clone();
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn normalize_run_plan_ports(store: &mut Store) -> bool {
+    let mut changed = false;
+    for run in store.runs.values_mut() {
+        if !matches!(
+            run.status,
+            RunStatus::Running | RunStatus::WaitingInput | RunStatus::Queued
+        ) {
+            continue;
+        }
+        let Some(snapshot) = run.plan_snapshot.as_mut() else {
+            continue;
+        };
+        let Ok(graph) = serde_json::from_str::<FrozenGraph>(&snapshot.graph_json) else {
+            continue;
+        };
+        let mut frozen = Store::default();
+        frozen.nodes = graph
+            .nodes
+            .into_iter()
+            .map(|node| (node.id, node))
+            .collect();
+        frozen.edges = graph
+            .edges
+            .into_iter()
+            .map(|edge| (edge.id, edge))
+            .collect();
+        if !normalize_known_node_ports(&mut frozen) {
+            continue;
+        }
+        let graph_json = graph_json_for_canvas(&frozen, run.canvas_id);
+        snapshot.graph_digest = sha256_digest(&graph_json);
+        snapshot.graph_json = graph_json;
+        changed = true;
+    }
+    changed
+}
+
 fn default_ports(node_id: Uuid, kind: &str) -> Vec<CanvasPort> {
     match kind {
         "trigger.start" => vec![
@@ -3563,6 +3756,202 @@ mod tests {
             emitted["runs"][0]["portValues"][text_port_id.to_string()]["type"],
             "text"
         );
+    }
+
+    #[test]
+    fn legacy_generic_ports_migrate_without_breaking_port_ids() {
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let legacy_ports = default_ports(node_id, "legacy.generic");
+        let legacy_input = legacy_ports
+            .iter()
+            .find(|port| port.name == "Input")
+            .unwrap()
+            .id;
+        let legacy_result = legacy_ports
+            .iter()
+            .find(|port| port.name == "Result")
+            .unwrap()
+            .id;
+        let legacy_complete = legacy_ports
+            .iter()
+            .find(|port| port.name == "Complete")
+            .unwrap()
+            .id;
+        let legacy_artifact = legacy_ports
+            .iter()
+            .find(|port| port.name == "Artifact")
+            .unwrap()
+            .id;
+        let source_node_id = Uuid::new_v4();
+        let source_port_id = Uuid::new_v4();
+        let edge_id = Uuid::new_v4();
+        let mut store = Store::default();
+        store.nodes.insert(
+            node_id,
+            CanvasNode {
+                id: node_id,
+                canvas_id,
+                name: "Project Analyze".to_string(),
+                kind: "workspace.analyze".to_string(),
+                ports: legacy_ports,
+                config: serde_json::Map::new(),
+            },
+        );
+        store.edges.insert(
+            edge_id,
+            CanvasEdge {
+                id: edge_id,
+                canvas_id,
+                source_node_id,
+                source_port_id,
+                target_node_id: node_id,
+                target_port_id: legacy_input,
+                kind: PortKind::Data,
+            },
+        );
+
+        assert!(normalize_known_node_ports(&mut store));
+        let node = store.nodes.get(&node_id).unwrap();
+        let port_id = |name: &str| node.ports.iter().find(|port| port.name == name).unwrap().id;
+        assert_eq!(port_id("Request"), legacy_input);
+        assert_eq!(port_id("Report"), legacy_result);
+        assert_eq!(port_id("Complete"), legacy_complete);
+        assert!(node.ports.iter().any(|port| {
+            port.id == legacy_complete
+                && matches!(port.direction, PortDirection::Output)
+                && matches!(port.kind, PortKind::Flow)
+        }));
+        assert!(!node.ports.iter().any(|port| port.id == legacy_artifact));
+        assert_eq!(
+            store.edges.get(&edge_id).unwrap().target_port_id,
+            legacy_input
+        );
+        assert!(!normalize_known_node_ports(&mut store));
+    }
+
+    #[test]
+    fn running_plan_port_migration_recomputes_the_frozen_graph_digest() {
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let graph_json = serde_json::json!({
+            "nodes": [{
+                "id": node_id,
+                "canvasId": canvas_id,
+                "name": "Agent Analyze",
+                "kind": "agent.analyze",
+                "ports": default_ports(node_id, "legacy.generic"),
+                "config": {}
+            }],
+            "edges": []
+        })
+        .to_string();
+        let old_digest = sha256_digest(&graph_json);
+        let mut store = Store::default();
+        store.runs.insert(
+            run_id,
+            Run {
+                id: run_id,
+                canvas_id,
+                revision: 1,
+                status: RunStatus::Running,
+                started_at: now(),
+                finished_at: None,
+                current_node_id: None,
+                input_prompt: None,
+                result: None,
+                plan_snapshot: Some(RunPlanSnapshot {
+                    schema_version: 1,
+                    entrypoint_node_id: node_id,
+                    node_order: vec![node_id],
+                    graph_digest: old_digest.clone(),
+                    graph_json,
+                }),
+                execution_cursor: 0,
+                completed_node_ids: Vec::new(),
+                port_values: HashMap::new(),
+                node_values: HashMap::new(),
+            },
+        );
+
+        assert!(normalize_run_plan_ports(&mut store));
+        let snapshot = store
+            .runs
+            .get(&run_id)
+            .unwrap()
+            .plan_snapshot
+            .as_ref()
+            .unwrap();
+        assert_ne!(snapshot.graph_digest, old_digest);
+        assert_eq!(snapshot.graph_digest, sha256_digest(&snapshot.graph_json));
+        let graph: FrozenGraph = serde_json::from_str(&snapshot.graph_json).unwrap();
+        let names = graph.nodes[0]
+            .ports
+            .iter()
+            .map(|port| port.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["Start", "Goal", "Context", "Result", "Complete"]
+        );
+    }
+
+    #[test]
+    fn completed_plan_port_migration_preserves_the_frozen_graph() {
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let graph_json = serde_json::json!({
+            "nodes": [{
+                "id": node_id,
+                "canvasId": canvas_id,
+                "name": "Project Analyze",
+                "kind": "workspace.analyze",
+                "ports": default_ports(node_id, "legacy.generic"),
+                "config": {}
+            }],
+            "edges": []
+        })
+        .to_string();
+        let graph_digest = sha256_digest(&graph_json);
+        let mut store = Store::default();
+        store.runs.insert(
+            run_id,
+            Run {
+                id: run_id,
+                canvas_id,
+                revision: 1,
+                status: RunStatus::Succeeded,
+                started_at: now(),
+                finished_at: Some(now()),
+                current_node_id: None,
+                input_prompt: None,
+                result: Some("complete".to_string()),
+                plan_snapshot: Some(RunPlanSnapshot {
+                    schema_version: 1,
+                    entrypoint_node_id: node_id,
+                    node_order: vec![node_id],
+                    graph_digest: graph_digest.clone(),
+                    graph_json: graph_json.clone(),
+                }),
+                execution_cursor: 1,
+                completed_node_ids: vec![node_id],
+                port_values: HashMap::new(),
+                node_values: HashMap::new(),
+            },
+        );
+
+        assert!(!normalize_run_plan_ports(&mut store));
+        let snapshot = store
+            .runs
+            .get(&run_id)
+            .unwrap()
+            .plan_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(snapshot.graph_digest, graph_digest);
+        assert_eq!(snapshot.graph_json, graph_json);
     }
 
     #[tokio::test]
