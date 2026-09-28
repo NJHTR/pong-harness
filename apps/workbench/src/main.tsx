@@ -1888,7 +1888,8 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!nodes.length) return { valid: false, message: "This canvas has no nodes. Add nodes before configuring a manual entrypoint." };
   const entry = nodes.find((node) => node.id === canvas.defaultEntrypointNodeId);
   if (!entry) return { valid: false, message: "The configured entry node is missing from this canvas." };
-  const runtimeValidation = validateRuntimeGraph(toRuntimeGraphDocument(canvas, nodes, edges), "workflow");
+  const runtimeGraph = toRuntimeGraphDocument(canvas, nodes, edges);
+  const runtimeValidation = validateRuntimeGraph(runtimeGraph, "workflow");
   if (!runtimeValidation.valid) {
     return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
   }
@@ -1901,15 +1902,14 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
     const source = nodeById.get(edge.sourceNodeId);
     const target = nodeById.get(edge.targetNodeId);
     if (!source || !target) return { valid: false, message: "A connection points to a node outside this canvas." };
-    if (source.id === target.id) return { valid: false, message: "A node cannot connect to itself." };
     const sourcePort = source.ports.find((port) => port.id === edge.sourcePortId);
     const targetPort = target.ports.find((port) => port.id === edge.targetPortId);
     if (!sourcePort || !targetPort) return { valid: false, message: "A connection points to a missing port." };
-    if (edge.kind === "flow") {
-      const next = adjacency.get(source.id) ?? [];
-      next.push(target.id);
-      adjacency.set(source.id, next);
-    }
+  }
+  for (const edge of runtimeGraph.edges.filter((edge) => edge.kind === "control")) {
+    const next = adjacency.get(edge.source.nodeId) ?? [];
+    next.push(edge.target.nodeId);
+    adjacency.set(edge.source.nodeId, next);
   }
   const reachable = new Set<string>();
   const queue = [entry.id];
