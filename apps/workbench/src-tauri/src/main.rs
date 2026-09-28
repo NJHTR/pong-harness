@@ -14,8 +14,6 @@ use uuid::Uuid;
 
 const HOST_URL: &str = "http://127.0.0.1:4317";
 const HOST_READY_LINE: &str = "pong-host listening on http://127.0.0.1:4317";
-const AGENT_KEYRING_SERVICE: &str = "com.seekwd.workbench.agent";
-const AGENT_KEYRING_USER: &str = "default";
 
 struct HostProcess(Mutex<Option<Child>>);
 
@@ -102,91 +100,19 @@ fn create_project_directory(
     create_project_directory_at(parent, &name)
 }
 
-fn agent_keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
-        .map_err(|error| format!("Unable to access the Windows Credential Manager: {error}"))
-}
-
-fn validate_agent_endpoint(endpoint: &str) -> Result<String, String> {
-    let value = endpoint.trim().trim_end_matches('/').to_string();
-    if value.contains(char::is_whitespace) {
-        return Err("Agent endpoint cannot contain whitespace".to_string());
-    }
-    let parsed = reqwest::Url::parse(&value)
-        .map_err(|error| format!("Agent endpoint is not a valid URL: {error}"))?;
-    let secure = parsed.scheme() == "https";
-    let local_http = parsed.scheme() == "http"
-        && parsed
-            .host_str()
-            .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
-    if !secure && !local_http {
-        return Err(
-            "Agent endpoints must use HTTPS. HTTP is allowed only for localhost.".to_string(),
-        );
-    }
-    Ok(value)
-}
-
 #[tauri::command]
 fn has_agent_api_key() -> Result<bool, String> {
-    let entry = agent_keyring_entry()?;
-    match entry.get_password() {
-        Ok(value) => Ok(!value.trim().is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(error) => Err(format!("Unable to read the Agent API key: {error}")),
-    }
+    seekwd_agent_provider::has_api_key()
 }
 
 #[tauri::command]
 fn save_agent_api_key(api_key: String) -> Result<(), String> {
-    let entry = agent_keyring_entry()?;
-    if api_key.trim().is_empty() {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(format!("Unable to remove the Agent API key: {error}")),
-        }
-    } else {
-        entry
-            .set_password(api_key.trim())
-            .map_err(|error| format!("Unable to save the Agent API key: {error}"))
-    }
+    seekwd_agent_provider::save_api_key(&api_key)
 }
 
 #[tauri::command]
 async fn test_agent_provider(endpoint: String, model: String) -> Result<String, String> {
-    let endpoint = validate_agent_endpoint(&endpoint)?;
-    let model = model.trim();
-    if model.is_empty() {
-        return Err("Agent model is required".to_string());
-    }
-    let api_key = agent_keyring_entry()?
-        .get_password()
-        .map_err(|error| format!("Configure an Agent API key first: {error}"))?;
-    if api_key.trim().is_empty() {
-        return Err("Configure an Agent API key first".to_string());
-    }
-    let url = format!("{endpoint}/chat/completions");
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&api_key)
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
-            "max_tokens": 4,
-            "temperature": 0
-        }))
-        .send()
-        .await
-        .map_err(|error| format!("Unable to reach the Agent endpoint: {error}"))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "Agent endpoint returned {status}: {}",
-            truncate_error_body(&body, &api_key)
-        ));
-    }
-    Ok("Agent connection verified".to_string())
+    seekwd_agent_provider::test_openai_compatible(&endpoint, &model).await
 }
 
 #[tauri::command]
@@ -198,70 +124,16 @@ async fn run_agent_prompt(
     environment: String,
     instructions: String,
 ) -> Result<String, String> {
-    let endpoint = validate_agent_endpoint(&endpoint)?;
-    let model = model.trim();
-    let prompt = prompt.trim();
-    if model.is_empty() || prompt.is_empty() {
-        return Err("Agent model and prompt are required".to_string());
-    }
-    let api_key = agent_keyring_entry()?
-        .get_password()
-        .map_err(|error| format!("Configure an Agent API key first: {error}"))?;
-    if api_key.trim().is_empty() {
-        return Err("Configure an Agent API key first".to_string());
-    }
-    let extra_instructions = instructions.trim();
-    let system = format!(
-        "You are the configured Seekwd Agent for workspace '{workspace_name}'. \
-         The selected execution environment is '{environment}'. \
-         You may explain and propose work, but do not claim that files or graph nodes were changed unless Seekwd explicitly confirms it. \
-         {extra_instructions}"
-    );
-    let url = format!("{endpoint}/chat/completions");
-    let response = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&api_key)
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": prompt }
-            ]
-        }))
-        .send()
-        .await
-        .map_err(|error| format!("Unable to reach the Agent endpoint: {error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Unable to read the Agent response: {error}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "Agent endpoint returned {status}: {}",
-            truncate_error_body(&body, &api_key)
-        ));
-    }
-    let payload: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|error| format!("Agent returned invalid JSON: {error}"))?;
-    payload
-        .pointer("/choices/0/message/content")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "Agent response did not contain choices[0].message.content".to_string())
-}
-
-fn truncate_error_body(body: &str, api_key: &str) -> String {
-    let normalized = body
-        .trim()
-        .replace(['\r', '\n'], " ")
-        .replace(api_key, "[redacted]");
-    if normalized.chars().count() > 320 {
-        format!("{}…", normalized.chars().take(320).collect::<String>())
-    } else {
-        normalized
-    }
+    seekwd_agent_provider::run_openai_compatible(seekwd_agent_provider::AgentRequest {
+        endpoint: &endpoint,
+        model: &model,
+        prompt: &prompt,
+        workspace_name: &workspace_name,
+        environment: &environment,
+        instructions: &instructions,
+        context: None,
+    })
+    .await
 }
 
 fn host_token() -> String {
@@ -434,23 +306,6 @@ mod tests {
         assert!(create_project_directory_at(parent.clone(), "New Project").is_err());
 
         fs::remove_dir_all(parent).unwrap();
-    }
-
-    #[test]
-    fn agent_endpoint_requires_secure_transport_except_loopback() {
-        assert!(validate_agent_endpoint("https://api.example.com/v1").is_ok());
-        assert!(validate_agent_endpoint("http://127.0.0.1:8080/v1").is_ok());
-        assert!(validate_agent_endpoint("http://api.example.com/v1").is_err());
-        assert!(validate_agent_endpoint("ftp://api.example.com/v1").is_err());
-    }
-
-    #[test]
-    fn agent_error_body_redacts_and_truncates_secrets() {
-        let body = format!("token={} {}", "secret-key", "x".repeat(400));
-        let sanitized = truncate_error_body(&body, "secret-key");
-        assert!(!sanitized.contains("secret-key"));
-        assert!(sanitized.contains("[redacted]"));
-        assert!(sanitized.chars().count() <= 321);
     }
 
     #[test]

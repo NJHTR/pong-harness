@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/pong-core", "crates/pong-host", "apps/workbench/src-tauri"]
+members = [
+  "crates/pong-core",
+  "crates/pong-host",
+  "crates/seekwd-agent-provider",
+  "apps/workbench/src-tauri",
+]
 
 [workspace.package]
 edition = "2024"
