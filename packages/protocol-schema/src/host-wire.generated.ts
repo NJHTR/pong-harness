@@ -105,6 +105,9 @@ export interface Run {
   inputPrompt?: string | null;
   result?: string | null;
   completedNodeIds?: string[];
+  nodeValues?: {
+    [k: string]: string;
+  };
 }
 export interface Notification {
   id: string;

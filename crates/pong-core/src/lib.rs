@@ -111,6 +111,8 @@ pub struct Run {
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub completed_node_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub node_values: std::collections::HashMap<Id, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

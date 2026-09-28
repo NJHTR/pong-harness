@@ -112,7 +112,11 @@
         "currentNodeId": { "type": ["string", "null"] },
         "inputPrompt": { "type": ["string", "null"] },
         "result": { "type": ["string", "null"] },
-        "completedNodeIds": { "type": "array", "items": { "type": "string" } }
+        "completedNodeIds": { "type": "array", "items": { "type": "string" } },
+        "nodeValues": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
       }
     },
     "Notification": {

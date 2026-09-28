@@ -17,10 +17,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     env,
     fs::{File, OpenOptions, read_dir},
-    io,
+    io::{self, Read},
     path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -900,6 +900,7 @@ fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static 
         "task.manual",
         "output.text",
         "workspace.scan",
+        "workspace.analyze",
     ];
     if nodes
         .iter()
@@ -986,10 +987,12 @@ fn first_interactive_node(
         .values()
         .filter(|edge| edge.canvas_id == canvas_id)
     {
-        adjacency
-            .entry(edge.source_node_id)
-            .or_default()
-            .push(edge.target_node_id);
+        if matches!(edge.kind, PortKind::Flow) {
+            adjacency
+                .entry(edge.source_node_id)
+                .or_default()
+                .push(edge.target_node_id);
+        }
     }
     let mut queue = std::collections::VecDeque::from([entrypoint_id]);
     let mut visited = std::collections::HashSet::new();
@@ -1033,7 +1036,51 @@ fn first_interactive_node(
     None
 }
 
-fn resolve_text_output(store: &Store, canvas_id: Uuid) -> Result<Option<String>, &'static str> {
+fn node_text_value(
+    node: &CanvasNode,
+    node_values: &HashMap<Uuid, String>,
+) -> Option<String> {
+    node_values
+        .get(&node.id)
+        .map(String::as_str)
+        .or_else(|| {
+            node.config
+                .get("inputValue")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn connected_text_value(
+    store: &Store,
+    canvas_id: Uuid,
+    target_node: &CanvasNode,
+    target_port_name: &str,
+    node_values: &HashMap<Uuid, String>,
+) -> Option<String> {
+    let target_port = target_node
+        .ports
+        .iter()
+        .find(|port| port.name == target_port_name && matches!(port.direction, PortDirection::Input))?;
+    let edge = store
+        .edges
+        .values()
+        .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == target_port.id)?;
+    let source = store.nodes.get(&edge.source_node_id)?;
+    if source.kind == "input.text" {
+        node_text_value(source, node_values)
+    } else {
+        None
+    }
+}
+
+fn resolve_text_output(
+    store: &Store,
+    canvas_id: Uuid,
+    node_values: &HashMap<Uuid, String>,
+) -> Result<Option<String>, String> {
     let output_nodes = store
         .nodes
         .values()
@@ -1058,24 +1105,31 @@ fn resolve_text_output(store: &Store, canvas_id: Uuid) -> Result<Option<String>,
         let source = store
             .nodes
             .get(&edge.source_node_id)
-            .ok_or("Text Output source node was not found")?;
+            .ok_or_else(|| "Text Output source node was not found".to_string())?;
         match source.kind.as_str() {
             "input.text" => {
-                let value = source
-                    .config
-                    .get("inputValue")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or("Set a value on the connected Text Input node before running")?;
-                values.push(value.trim().to_string());
+                let value = node_text_value(source, node_values).ok_or_else(|| {
+                    "Set a value on the connected Text Input node before running".to_string()
+                })?;
+                values.push(value);
             }
             "workspace.scan" => {
                 let scan = resolve_workspace_scan(store, canvas_id)
-                    .map_err(|_| "Workspace scan could not produce output")?
-                    .ok_or("Workspace scan did not produce output")?;
+                    .map_err(|_| "Workspace scan could not produce output".to_string())?
+                    .ok_or_else(|| "Workspace scan did not produce output".to_string())?;
                 values.push(scan);
             }
-            _ => return Err("Text Output currently accepts Text Input or Workspace Scan nodes"),
+            "workspace.analyze" => {
+                let report = resolve_project_analysis(store, canvas_id, node_values)?
+                    .ok_or_else(|| "Project analysis did not produce a report".to_string())?;
+                values.push(report);
+            }
+            _ => {
+                return Err(
+                    "Text Output currently accepts Text Input, Workspace Scan, or Project Analyze nodes"
+                        .to_string(),
+                );
+            }
         }
     }
     Ok(Some(values.join("\n")))
@@ -1198,8 +1252,426 @@ fn resolve_workspace_scan(store: &Store, canvas_id: Uuid) -> Result<Option<Strin
     .map_err(|error| format!("Unable to serialize workspace scan result: {error}"))
 }
 
-fn resolve_run_output(store: &Store, canvas_id: Uuid) -> Result<Option<String>, String> {
-    if let Some(value) = resolve_text_output(store, canvas_id).map_err(str::to_string)? {
+fn read_bounded_text(path: &FsPath, max_bytes: u64) -> Result<String, String> {
+    let metadata = path
+        .metadata()
+        .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?;
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{} exceeds the {} byte analysis limit",
+            path.display(),
+            max_bytes
+        ));
+    }
+    let mut content = String::new();
+    File::open(path)
+        .map_err(|error| format!("Unable to open {}: {error}", path.display()))?
+        .take(max_bytes + 1)
+        .read_to_string(&mut content)
+        .map_err(|error| format!("Unable to read {} as UTF-8 text: {error}", path.display()))?;
+    Ok(content)
+}
+
+fn xml_tag(content: &str, tag: &str) -> Option<String> {
+    let start_marker = format!("<{tag}>");
+    let end_marker = format!("</{tag}>");
+    let start = content.find(&start_marker)? + start_marker.len();
+    let end = content[start..].find(&end_marker)? + start;
+    let value = content[start..end].trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn toml_string(content: &str, key: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let line = line.trim();
+        let (candidate, value) = line.split_once('=')?;
+        if candidate.trim() != key {
+            return None;
+        }
+        let value = value.trim().trim_matches(['"', '\'']);
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn manifest_summary(path: &FsPath, relative: &str) -> serde_json::Value {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let content = read_bounded_text(path, 256 * 1024);
+    match (name, content) {
+        ("package.json", Ok(content)) => {
+            let parsed = serde_json::from_str::<serde_json::Value>(&content).ok();
+            serde_json::json!({
+                "path": relative,
+                "kind": "Node.js package",
+                "name": parsed.as_ref().and_then(|value| value.get("name")).and_then(serde_json::Value::as_str),
+                "scripts": parsed.as_ref().and_then(|value| value.get("scripts")).and_then(serde_json::Value::as_object).map(|value| value.len()),
+                "dependencies": parsed.as_ref().and_then(|value| value.get("dependencies")).and_then(serde_json::Value::as_object).map(|value| value.len()).unwrap_or(0)
+                    + parsed.as_ref().and_then(|value| value.get("devDependencies")).and_then(serde_json::Value::as_object).map(|value| value.len()).unwrap_or(0)
+            })
+        }
+        ("pom.xml", Ok(content)) => serde_json::json!({
+            "path": relative,
+            "kind": "Maven project",
+            "groupId": xml_tag(&content, "groupId"),
+            "artifactId": xml_tag(&content, "artifactId"),
+            "version": xml_tag(&content, "version")
+        }),
+        ("Cargo.toml", Ok(content)) => serde_json::json!({
+            "path": relative,
+            "kind": "Rust package",
+            "name": toml_string(&content, "name"),
+            "version": toml_string(&content, "version")
+        }),
+        ("pyproject.toml", Ok(content)) => serde_json::json!({
+            "path": relative,
+            "kind": "Python package",
+            "name": toml_string(&content, "name"),
+            "version": toml_string(&content, "version")
+        }),
+        ("go.mod", Ok(content)) => serde_json::json!({
+            "path": relative,
+            "kind": "Go module",
+            "module": content.lines().find_map(|line| line.trim().strip_prefix("module ")).map(str::trim)
+        }),
+        ("build.gradle", Ok(_)) | ("build.gradle.kts", Ok(_)) => serde_json::json!({
+            "path": relative,
+            "kind": "Gradle project"
+        }),
+        ("settings.gradle", Ok(_)) | ("settings.gradle.kts", Ok(_)) => serde_json::json!({
+            "path": relative,
+            "kind": "Gradle workspace"
+        }),
+        ("requirements.txt", Ok(content)) => serde_json::json!({
+            "path": relative,
+            "kind": "Python requirements",
+            "dependencies": content.lines().filter(|line| {
+                let line = line.trim();
+                !line.is_empty() && !line.starts_with('#')
+            }).count()
+        }),
+        (_, Err(error)) => serde_json::json!({
+            "path": relative,
+            "kind": "Manifest",
+            "readError": error
+        }),
+        _ => serde_json::json!({
+            "path": relative,
+            "kind": "Manifest"
+        }),
+    }
+}
+
+fn language_name(extension: &str) -> &str {
+    match extension {
+        "java" => "Java",
+        "kt" | "kts" => "Kotlin",
+        "rs" => "Rust",
+        "ts" | "tsx" => "TypeScript",
+        "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
+        "py" => "Python",
+        "go" => "Go",
+        "cs" => "C#",
+        "c" | "h" => "C",
+        "cpp" | "cc" | "cxx" | "hpp" => "C++",
+        "sql" => "SQL",
+        "html" | "htm" => "HTML",
+        "css" | "scss" | "less" => "CSS",
+        "xml" => "XML",
+        "json" => "JSON",
+        "yaml" | "yml" => "YAML",
+        "md" => "Markdown",
+        _ => extension,
+    }
+}
+
+fn resolve_project_analysis(
+    store: &Store,
+    canvas_id: Uuid,
+    node_values: &HashMap<Uuid, String>,
+) -> Result<Option<String>, String> {
+    let analyze_nodes = store
+        .nodes
+        .values()
+        .filter(|node| node.canvas_id == canvas_id && node.kind == "workspace.analyze")
+        .collect::<Vec<_>>();
+    if analyze_nodes.is_empty() {
+        return Ok(None);
+    }
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .ok_or_else(|| "Canvas was not found".to_string())?;
+    let workspace = store
+        .workspaces
+        .get(&canvas.workspace_id)
+        .ok_or_else(|| "Workspace was not found".to_string())?;
+    let root = FsPath::new(&workspace.path);
+    if !root.is_dir() {
+        return Err(format!(
+            "Workspace path is not an accessible directory: {}",
+            root.display()
+        ));
+    }
+
+    let max_entries = analyze_nodes
+        .iter()
+        .filter_map(|node| node.config.get("maxEntries").and_then(serde_json::Value::as_u64))
+        .min()
+        .unwrap_or(5000)
+        .clamp(1, 20_000) as usize;
+    let max_depth = analyze_nodes
+        .iter()
+        .filter_map(|node| node.config.get("maxDepth").and_then(serde_json::Value::as_u64))
+        .min()
+        .unwrap_or(16)
+        .clamp(1, 32) as usize;
+    let request = analyze_nodes
+        .iter()
+        .find_map(|node| connected_text_value(store, canvas_id, node, "Request", node_values))
+        .or_else(|| {
+            analyze_nodes.iter().find_map(|node| {
+                node.config
+                    .get("request")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+        })
+        .unwrap_or_else(|| "Analyze the project structure, build system, languages, tests, and likely entrypoints.".to_string());
+
+    let ignored = [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".idea",
+        ".gradle",
+        ".venv",
+        "vendor",
+        "coverage",
+    ];
+    let manifest_names = [
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "requirements.txt",
+        "go.mod",
+    ];
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut files = 0usize;
+    let mut directories = 0usize;
+    let mut test_files = 0usize;
+    let mut truncated = false;
+    let mut language_counts = BTreeMap::<String, usize>::new();
+    let mut top_level_directories = BTreeSet::<String>::new();
+    let mut entrypoints = BTreeSet::<String>::new();
+    let mut manifests = Vec::<(PathBuf, String)>::new();
+    let mut has_readme = false;
+
+    while let Some((directory, depth)) = pending.pop() {
+        let listing = read_dir(&directory)
+            .map_err(|error| format!("Unable to read {}: {error}", directory.display()))?;
+        for item in listing {
+            if files + directories >= max_entries {
+                truncated = true;
+                break;
+            }
+            let item = item.map_err(|error| format!("Unable to inspect workspace entry: {error}"))?;
+            let file_type = item
+                .file_type()
+                .map_err(|error| format!("Unable to inspect {}: {error}", item.path().display()))?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = item.path();
+            let name = item.file_name().to_string_lossy().to_string();
+            if file_type.is_dir() {
+                if ignored.contains(&name.as_str()) {
+                    continue;
+                }
+                directories += 1;
+                if depth == 0 {
+                    top_level_directories.insert(name.clone());
+                }
+                if depth < max_depth {
+                    pending.push((path, depth + 1));
+                } else {
+                    truncated = true;
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            files += 1;
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(path.as_path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            let lower = relative.to_ascii_lowercase();
+            if lower == "readme.md" || lower == "readme" || lower.starts_with("readme.") {
+                has_readme = true;
+            }
+            if lower.contains("/test/")
+                || lower.contains("/tests/")
+                || lower.contains("/__tests__/")
+                || lower.ends_with("test.java")
+                || lower.ends_with("tests.java")
+                || lower.ends_with("_test.go")
+                || lower.ends_with("_test.py")
+                || lower.ends_with(".test.ts")
+                || lower.ends_with(".spec.ts")
+            {
+                test_files += 1;
+            }
+            if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
+                *language_counts.entry(extension.to_ascii_lowercase()).or_default() += 1;
+            }
+            if manifest_names.contains(&name.as_str()) && manifests.len() < 64 {
+                manifests.push((path.clone(), relative.clone()));
+            }
+            let filename = name.to_ascii_lowercase();
+            if matches!(
+                filename.as_str(),
+                "main.rs"
+                    | "main.go"
+                    | "main.py"
+                    | "app.py"
+                    | "main.ts"
+                    | "main.tsx"
+                    | "index.ts"
+                    | "index.tsx"
+                    | "program.cs"
+            ) || filename.ends_with("application.java")
+            {
+                if entrypoints.len() < 40 {
+                    entrypoints.insert(relative);
+                }
+            }
+        }
+        if truncated {
+            break;
+        }
+    }
+
+    let mut project_types = BTreeSet::<String>::new();
+    for (_, relative) in &manifests {
+        let name = FsPath::new(relative)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let project_type = match name {
+            "pom.xml" => "Java / Maven",
+            "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts" => "JVM / Gradle",
+            "package.json" => "Node.js / JavaScript",
+            "Cargo.toml" => "Rust / Cargo",
+            "pyproject.toml" | "requirements.txt" => "Python",
+            "go.mod" => "Go",
+            _ => "Unknown",
+        };
+        project_types.insert(project_type.to_string());
+    }
+    let manifest_reports = manifests
+        .iter()
+        .take(24)
+        .map(|(path, relative)| manifest_summary(path, relative))
+        .collect::<Vec<_>>();
+    let mut languages = language_counts
+        .into_iter()
+        .map(|(extension, count)| {
+            serde_json::json!({
+                "language": language_name(&extension),
+                "extension": extension,
+                "files": count
+            })
+        })
+        .collect::<Vec<_>>();
+    languages.sort_by(|left, right| {
+        right["files"]
+            .as_u64()
+            .cmp(&left["files"].as_u64())
+            .then_with(|| left["language"].as_str().cmp(&right["language"].as_str()))
+    });
+    languages.truncate(20);
+
+    let mut findings = Vec::<String>::new();
+    if project_types.len() > 1 {
+        findings.push(format!(
+            "Multiple build ecosystems were detected: {}.",
+            project_types.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    } else if let Some(project_type) = project_types.first() {
+        findings.push(format!("The primary detected project ecosystem is {project_type}."));
+    } else {
+        findings.push("No supported root or module manifest was detected.".to_string());
+    }
+    if test_files == 0 {
+        findings.push("No conventional test files were detected in the bounded scan.".to_string());
+    } else {
+        findings.push(format!("{test_files} conventional test files were detected."));
+    }
+    if !has_readme {
+        findings.push("No top-level README was detected.".to_string());
+    }
+    if truncated {
+        findings.push("The inventory reached its configured safety limit; results are partial.".to_string());
+    }
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "schemaVersion": "seekwd.project-analysis/0.1",
+        "request": request,
+        "workspace": {
+            "name": workspace.name,
+            "path": workspace.path
+        },
+        "inventory": {
+            "files": files,
+            "directories": directories,
+            "testFiles": test_files,
+            "truncated": truncated,
+            "limits": {
+                "maxEntries": max_entries,
+                "maxDepth": max_depth
+            }
+        },
+        "projectTypes": project_types,
+        "languages": languages,
+        "topLevelDirectories": top_level_directories,
+        "likelyEntrypoints": entrypoints,
+        "manifests": manifest_reports,
+        "findings": findings,
+        "securityBoundary": {
+            "workspaceReadOnly": true,
+            "networkAccess": false,
+            "ignoredDirectories": ignored,
+            "symlinksFollowed": false,
+            "sourceContentsRead": false,
+            "manifestReadLimitBytes": 262144
+        }
+    }))
+    .map(Some)
+    .map_err(|error| format!("Unable to serialize project analysis: {error}"))
+}
+
+fn resolve_run_output(
+    store: &Store,
+    canvas_id: Uuid,
+    node_values: &HashMap<Uuid, String>,
+) -> Result<Option<String>, String> {
+    if let Some(value) = resolve_text_output(store, canvas_id, node_values)? {
+        return Ok(Some(value));
+    }
+    if let Some(value) = resolve_project_analysis(store, canvas_id, node_values)? {
         return Ok(Some(value));
     }
     resolve_workspace_scan(store, canvas_id)
@@ -1431,6 +1903,12 @@ fn default_ports(node_id: Uuid, kind: &str) -> Vec<CanvasPort> {
         "workspace.scan" => vec![
             port(node_id, "Start", PortDirection::Input, PortKind::Flow),
             port(node_id, "Result", PortDirection::Output, PortKind::Data),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
+        ],
+        "workspace.analyze" => vec![
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "Request", PortDirection::Input, PortKind::Data),
+            port(node_id, "Report", PortDirection::Output, PortKind::Data),
             port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
         ],
         _ => vec![
@@ -1858,7 +2336,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 .ok()
                 .and_then(|_| first_interactive_node(&store, canvas_id, &run.completed_node_ids));
             let output = if result.is_ok() && interactive.is_none() {
-                resolve_run_output(&store, canvas_id)
+                resolve_run_output(&store, canvas_id, &run.node_values)
             } else {
                 Ok(None)
             };
@@ -1961,7 +2439,7 @@ async fn submit_run_input(
     }
     let mut store = state.inner.lock().unwrap();
     let previous = store.clone();
-    let (canvas_id, run, submitted_node_id) = {
+    let canvas_id = {
         let run = store
             .runs
             .get_mut(&run_id)
@@ -1974,68 +2452,34 @@ async fn submit_run_input(
                 false,
             ));
         }
-        run.status = RunStatus::Succeeded;
-        run.finished_at = Some(now());
-        run.result = Some(value.to_string());
         let current_node_id = run.current_node_id;
         if let Some(node_id) = current_node_id {
             if !run.completed_node_ids.contains(&node_id) {
                 run.completed_node_ids.push(node_id);
             }
+            run.node_values.insert(node_id, value.to_string());
         }
+        run.status = RunStatus::Running;
+        run.finished_at = None;
+        run.result = None;
         run.current_node_id = None;
         run.input_prompt = None;
-        let canvas_id = run.canvas_id;
-        (canvas_id, run.clone(), current_node_id)
+        run.canvas_id
     };
-    let canvas_name = store
+    let canvas = store
         .canvases
-        .get(&canvas_id)
-        .map(|canvas| canvas.name.clone())
-        .unwrap_or_else(|| "Canvas".to_string());
-    let submitted_node_name = submitted_node_id
-        .and_then(|node_id| store.nodes.get(&node_id))
-        .map(|node| node.name.clone())
-        .unwrap_or_else(|| "Interactive task".to_string());
-    let next_interactive = first_interactive_node(&store, canvas_id, &run.completed_node_ids);
-    let notification = if let Some((node_id, prompt)) = next_interactive {
-        let run_mut = store.runs.get_mut(&run_id).expect("run exists");
-        run_mut.status = RunStatus::WaitingInput;
-        run_mut.current_node_id = Some(node_id);
-        run_mut.input_prompt = Some(prompt.clone());
-        run_mut.finished_at = None;
-        let canvas = store.canvases.get_mut(&canvas_id).expect("canvas exists");
-        canvas.status = RunStatus::WaitingInput;
-        Notification {
-            id: Uuid::new_v4(),
-            title: "Run waiting for input".to_string(),
-            message: format!("{canvas_name} is waiting for a local input: {prompt}."),
-            severity: "info".to_string(),
-            created_at: now(),
-            run_id: Some(run_id),
-            canvas_id: Some(canvas_id),
-        }
-    } else {
-        let canvas = store
-            .canvases
-            .get_mut(&canvas_id)
-            .ok_or_else(|| not_found_error("Canvas was not found"))?;
-        canvas.status = RunStatus::Succeeded;
-        Notification {
-            id: Uuid::new_v4(),
-            title: "Run completed".to_string(),
-            message: format!(
-                "{submitted_node_name} received your submission. {canvas_name} run completed successfully."
-            ),
-            severity: "success".to_string(),
-            created_at: now(),
-            run_id: Some(run_id),
-            canvas_id: Some(canvas_id),
-        }
-    };
-    store.notifications.insert(notification.id, notification);
+        .get_mut(&canvas_id)
+        .ok_or_else(|| not_found_error("Canvas was not found"))?;
+    canvas.status = RunStatus::Running;
     persist_candidate(&state, &mut store, previous)?;
-    Ok(Json(store.runs.get(&run_id).cloned().unwrap_or(run)))
+    let run = store
+        .runs
+        .get(&run_id)
+        .cloned()
+        .ok_or_else(|| not_found_error("Run was not found"))?;
+    drop(store);
+    schedule_run_execution(state, run_id);
+    Ok(Json(run))
 }
 
 async fn start_run(
@@ -2128,6 +2572,7 @@ async fn start_run(
         input_prompt: None,
         result: None,
         completed_node_ids: Vec::new(),
+        node_values: HashMap::new(),
     };
     store.runs.insert(run.id, run.clone());
     store.run_idempotency.insert(key, run.id);
@@ -2319,8 +2764,17 @@ mod tests {
         );
 
         assert_eq!(
-            resolve_text_output(&store, canvas_id).unwrap().as_deref(),
+            resolve_text_output(&store, canvas_id, &HashMap::new())
+                .unwrap()
+                .as_deref(),
             Some("Hello World")
+        );
+        let runtime_values = HashMap::from([(input_id, "Runtime input".to_string())]);
+        assert_eq!(
+            resolve_text_output(&store, canvas_id, &runtime_values)
+                .unwrap()
+                .as_deref(),
+            Some("Runtime input")
         );
     }
 
@@ -2386,6 +2840,131 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|item| !item.as_str().unwrap().contains("node_modules"))
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_analysis_reports_manifests_tests_entrypoints_and_runtime_request() {
+        let root = std::env::temp_dir().join(format!("pong-host-analyze-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src/main/java/com/example")).unwrap();
+        std::fs::create_dir_all(root.join("src/test/java/com/example")).unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(
+            root.join("pom.xml"),
+            "<project><groupId>com.example</groupId><artifactId>demo</artifactId><version>1.0</version></project>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main/java/com/example/DemoApplication.java"),
+            "class DemoApplication {}",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/test/java/com/example/DemoTest.java"),
+            "class DemoTest {}",
+        )
+        .unwrap();
+        std::fs::write(root.join("target/ignored.js"), "ignored").unwrap();
+
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let analyze_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let analyze_ports = default_ports(analyze_id, "workspace.analyze");
+        let input_text_port = input_ports
+            .iter()
+            .find(|port| port.name == "Text")
+            .unwrap()
+            .id;
+        let analyze_request_port = analyze_ports
+            .iter()
+            .find(|port| port.name == "Request")
+            .unwrap()
+            .id;
+        let mut store = Store::default();
+        store.workspaces.insert(
+            workspace_id,
+            Workspace {
+                id: workspace_id,
+                name: "Backend".to_string(),
+                path: root.to_string_lossy().to_string(),
+                updated_at: now(),
+            },
+        );
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id,
+                name: "Analyze".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(input_id),
+                revision: 0,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        store.nodes.insert(
+            input_id,
+            CanvasNode {
+                id: input_id,
+                canvas_id,
+                name: "Analysis request".to_string(),
+                kind: "input.text".to_string(),
+                ports: input_ports,
+                config: serde_json::Map::new(),
+            },
+        );
+        store.nodes.insert(
+            analyze_id,
+            CanvasNode {
+                id: analyze_id,
+                canvas_id,
+                name: "Project Analyze".to_string(),
+                kind: "workspace.analyze".to_string(),
+                ports: analyze_ports,
+                config: serde_json::Map::new(),
+            },
+        );
+        let edge_id = Uuid::new_v4();
+        store.edges.insert(
+            edge_id,
+            CanvasEdge {
+                id: edge_id,
+                canvas_id,
+                source_node_id: input_id,
+                source_port_id: input_text_port,
+                target_node_id: analyze_id,
+                target_port_id: analyze_request_port,
+                kind: PortKind::Data,
+            },
+        );
+
+        let values = HashMap::from([(input_id, "Analyze the backend carefully".to_string())]);
+        let result = resolve_project_analysis(&store, canvas_id, &values)
+            .unwrap()
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["request"], "Analyze the backend carefully");
+        assert_eq!(json["inventory"]["files"], 3);
+        assert_eq!(json["inventory"]["testFiles"], 1);
+        assert!(
+            json["projectTypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "Java / Maven")
+        );
+        assert!(
+            json["likelyEntrypoints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str().unwrap().ends_with("DemoApplication.java"))
         );
 
         std::fs::remove_dir_all(root).unwrap();
@@ -3542,6 +4121,7 @@ mod tests {
                 input_prompt: None,
                 result: None,
                 completed_node_ids: Vec::new(),
+                node_values: HashMap::new(),
             },
         );
         let mut snapshot = Snapshot::from(&run_store);
@@ -3744,6 +4324,7 @@ mod tests {
                 input_prompt: None,
                 result: None,
                 completed_node_ids: Vec::new(),
+                node_values: HashMap::new(),
             },
         );
         state.persist(&store).unwrap();
@@ -3783,6 +4364,7 @@ mod tests {
                 input_prompt: None,
                 result: None,
                 completed_node_ids: Vec::new(),
+                node_values: HashMap::new(),
             },
         );
         store

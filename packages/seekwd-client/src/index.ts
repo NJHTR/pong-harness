@@ -41,6 +41,7 @@ const runtimeNodeCategory = (kind: string): RuntimeNodeCategory => {
   if (kind.startsWith("trigger.")) return "trigger";
   if (kind.startsWith("input.")) return "input";
   if (kind.startsWith("output.")) return "output";
+  if (kind.startsWith("workspace.")) return "file";
   if (kind.startsWith("file.")) return "file";
   if (kind.startsWith("console.")) return "console";
   if (kind.startsWith("canvas.")) return "subcanvas";
@@ -126,6 +127,7 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "control.approval") return [port(nodeId, "Request", "input", "data"), port(nodeId, "Approved", "output", "event")];
   if (kind === "trigger.event") return [port(nodeId, "Event", "output", "event")];
   if (kind === "workspace.scan") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
+  if (kind === "workspace.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Request", "input", "data"), port(nodeId, "Report", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Artifact", "output", "resource"), port(nodeId, "Complete", "output", "event")];
 };
 const seed = (): HostSnapshot => {
@@ -179,17 +181,46 @@ export function createLocalHostClient(): HostClient {
     }
     return undefined;
   };
-  const resolveTextOutput = (canvasId: Id) => {
+  const nodeTextValue = (node: CanvasNode | undefined, nodeValues: Record<string, string> = {}) => {
+    const value = node ? nodeValues[node.id] ?? node.config?.inputValue : undefined;
+    return typeof value === "string" ? value.trim() : "";
+  };
+  const resolveTextOutput = (canvasId: Id, nodeValues: Record<string, string> = {}) => {
     const outputs = state.nodes.filter((node) => node.canvasId === canvasId && node.kind === "output.text");
     if (!outputs.length) return undefined;
     return outputs.map((output) => {
       const input = output.ports.find((candidate) => candidate.name === "Input" && candidate.direction === "input");
       const edge = state.edges.find((candidate) => candidate.canvasId === canvasId && candidate.targetPortId === input?.id);
       const source = edge ? state.nodes.find((node) => node.id === edge.sourceNodeId && node.kind === "input.text") : undefined;
-      const value = typeof source?.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
+      const value = nodeTextValue(source, nodeValues);
       if (!input || !edge || !source || !value) throw new Error("Text Output requires a configured Text Input value");
       return value;
     }).join("\n");
+  };
+  const continueLocalRun = (canvasId: Id, runId: Id) => {
+    const current = state.runs.find((candidate) => candidate.id === runId);
+    const currentCanvas = canvas(canvasId);
+    if (!current || !currentCanvas || current.status !== "running") return;
+    const next = firstInteractiveNode(canvasId, current.completedNodeIds ?? []);
+    if (next) {
+      current.status = "waiting_input";
+      current.currentNodeId = next.node.id;
+      current.inputPrompt = next.prompt;
+      currentCanvas.status = "waiting_input";
+    } else {
+      try {
+        current.result = resolveTextOutput(canvasId, current.nodeValues ?? {}) ?? null;
+        current.status = "succeeded";
+        current.finishedAt = now();
+        currentCanvas.status = "succeeded";
+      } catch (error) {
+        current.status = "failed";
+        current.inputPrompt = error instanceof Error ? error.message : "Text Output could not resolve its input.";
+        current.finishedAt = now();
+        currentCanvas.status = "failed";
+      }
+    }
+    commit();
   };
   const client: HostClient = {
     async snapshot() { return structuredClone(state); },
@@ -245,8 +276,57 @@ export function createLocalHostClient(): HostClient {
     async deleteCanvas(id) { const item = canvas(id); if (!item) throw new Error("Canvas not found"); if (item.status === "running" || item.status === "waiting_input" || state.runs.some((run) => run.canvasId === id && (run.status === "running" || run.status === "waiting_input" || run.status === "queued"))) throw new Error("Cannot delete a canvas while it has an active run."); state.canvases = state.canvases.filter((candidate) => candidate.id !== id); state.nodes = state.nodes.filter((candidate) => candidate.canvasId !== id); state.edges = state.edges.filter((candidate) => candidate.canvasId !== id); state.revisions = state.revisions.filter((candidate) => candidate.canvasId !== id); state.runs = state.runs.filter((candidate) => candidate.canvasId !== id); state.notifications = state.notifications.filter((candidate) => candidate.canvasId !== id); commit(); },
     async setDefaultEntrypoint(canvasId, nodeId) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); if (!state.nodes.some((node) => node.id === nodeId && node.canvasId === canvasId)) throw new Error("Entrypoint node not found"); item.defaultEntrypointNodeId = nodeId; item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); commit(); return structuredClone(item); },
     async saveRevision(canvasId, expectedDraftRevision) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); if (expectedDraftRevision !== undefined && expectedDraftRevision !== item.draftRevision) throw new Error("Draft revision is stale"); item.revision += 1; item.draftDirty = false; item.updatedAt = now(); const graphJson = JSON.stringify({ nodes: state.nodes.filter((node) => node.canvasId === canvasId), edges: state.edges.filter((edge) => edge.canvasId === canvasId) }); const revision: CanvasRevision = { id: uid("revision"), canvasId, revision: item.revision, createdAt: now(), createdBy: "user", status: "debug", contentDigest: legacyDigest, graphJson }; state.revisions.push(revision); commit(); return structuredClone(revision); },
-    async startRun(input) { const item = canvas(input.canvasId); if (!item) throw new Error("Canvas not found"); if (!item.defaultEntrypointNodeId) throw new Error("This canvas has no manual entrypoint. Configure an entrypoint before running."); if (input.revision !== item.revision) throw new Error("Revision is stale"); if (item.status === "running" || item.status === "waiting_input") throw new Error("A run is already active or waiting for input"); const unsupported = state.nodes.find((node) => node.canvasId === item.id && !["trigger.start", "input.text", "task.manual", "output.text"].includes(node.kind)); if (unsupported) throw new Error(`Node kind ${unsupported.kind} is not executable in this MVP`); const run: Run = { id: uid("run"), canvasId: item.id, revision: input.revision, status: "running", startedAt: now(), finishedAt: null, currentNodeId: null, inputPrompt: null, result: null, completedNodeIds: [] }; item.status = "running"; state.runs.unshift(run); commit(); window.setTimeout(() => { const current = state.runs.find((candidate) => candidate.id === run.id); const currentCanvas = canvas(item.id); if (!current || !currentCanvas || current.status !== "running") return; const next = firstInteractiveNode(item.id, current.completedNodeIds ?? []); if (next) { current.status = "waiting_input"; current.currentNodeId = next.node.id; current.inputPrompt = next.prompt; currentCanvas.status = "waiting_input"; } else { try { current.result = resolveTextOutput(item.id) ?? null; current.status = "succeeded"; current.finishedAt = now(); currentCanvas.status = "succeeded"; } catch (error) { current.status = "failed"; current.inputPrompt = error instanceof Error ? error.message : "Text Output could not resolve its input."; current.finishedAt = now(); currentCanvas.status = "failed"; } } commit(); }, 80); return structuredClone(run); },
-    async submitRunInput(input) { const run = state.runs.find((candidate) => candidate.id === input.runId); if (!run) throw new Error("Run not found"); if (run.status !== "waiting_input") throw new Error("This run is not waiting for input"); const item = canvas(run.canvasId); if (!item) throw new Error("Canvas not found"); if (!input.value.trim()) throw new Error("A result value is required"); const submittedNodeName = run.currentNodeId ? state.nodes.find((node) => node.id === run.currentNodeId)?.name ?? "Interactive task" : "Interactive task"; run.result = input.value.trim(); if (run.currentNodeId && !(run.completedNodeIds ?? []).includes(run.currentNodeId)) run.completedNodeIds = [...(run.completedNodeIds ?? []), run.currentNodeId]; const next = firstInteractiveNode(item.id, run.completedNodeIds ?? []); if (next) { run.status = "waiting_input"; run.currentNodeId = next.node.id; run.inputPrompt = next.prompt; item.status = "waiting_input"; } else { run.status = "succeeded"; run.finishedAt = now(); run.currentNodeId = null; run.inputPrompt = null; item.status = "succeeded"; } const notification: Notification = { id: uid("notification"), title: next ? "Run waiting for input" : "Run completed", message: next ? `${item.name} is waiting for a local input: ${run.inputPrompt}.` : `${submittedNodeName} received your submission. ${item.name} run completed successfully.`, severity: next ? "info" : "success", createdAt: now(), canvasId: item.id, runId: run.id }; state.notifications.unshift(notification); commit(); return structuredClone(run); },
+    async startRun(input) {
+      const item = canvas(input.canvasId);
+      if (!item) throw new Error("Canvas not found");
+      if (!item.defaultEntrypointNodeId) throw new Error("This canvas has no manual entrypoint. Configure an entrypoint before running.");
+      if (input.revision !== item.revision) throw new Error("Revision is stale");
+      if (item.status === "running" || item.status === "waiting_input") throw new Error("A run is already active or waiting for input");
+      const unsupported = state.nodes.find((node) => node.canvasId === item.id && !["trigger.start", "input.text", "task.manual", "output.text"].includes(node.kind));
+      if (unsupported) throw new Error(`Node kind ${unsupported.kind} requires the local desktop Host`);
+      const run: Run = {
+        id: uid("run"),
+        canvasId: item.id,
+        revision: input.revision,
+        status: "running",
+        startedAt: now(),
+        finishedAt: null,
+        currentNodeId: null,
+        inputPrompt: null,
+        result: null,
+        completedNodeIds: [],
+        nodeValues: {},
+      };
+      item.status = "running";
+      state.runs.unshift(run);
+      commit();
+      window.setTimeout(() => continueLocalRun(item.id, run.id), 80);
+      return structuredClone(run);
+    },
+    async submitRunInput(input) {
+      const run = state.runs.find((candidate) => candidate.id === input.runId);
+      if (!run) throw new Error("Run not found");
+      if (run.status !== "waiting_input") throw new Error("This run is not waiting for input");
+      const item = canvas(run.canvasId);
+      if (!item) throw new Error("Canvas not found");
+      const value = input.value.trim();
+      if (!value) throw new Error("A result value is required");
+      if (run.currentNodeId) {
+        run.nodeValues = { ...(run.nodeValues ?? {}), [run.currentNodeId]: value };
+        if (!(run.completedNodeIds ?? []).includes(run.currentNodeId)) {
+          run.completedNodeIds = [...(run.completedNodeIds ?? []), run.currentNodeId];
+        }
+      }
+      run.status = "running";
+      run.finishedAt = null;
+      run.result = null;
+      run.currentNodeId = null;
+      run.inputPrompt = null;
+      item.status = "running";
+      commit();
+      window.setTimeout(() => continueLocalRun(item.id, run.id), 80);
+      return structuredClone(run);
+    },
     events: async (afterGlobalPosition, limit = 100) => { const next = afterGlobalPosition < localGlobalPosition ? Math.min(localGlobalPosition, afterGlobalPosition + Math.max(1, limit)) : afterGlobalPosition; return { events: next > afterGlobalPosition ? [{ eventId: uid("event"), eventType: "projection.snapshot.updated" as const, globalPosition: next, snapshotVersion: state.snapshotVersion, occurredAt: now() }] : [], nextGlobalPosition: next, snapshotVersion: state.snapshotVersion }; },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
   };
