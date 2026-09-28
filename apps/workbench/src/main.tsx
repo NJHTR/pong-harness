@@ -1658,7 +1658,7 @@ function CanvasSurface({
           }}
         />
       ))}
-      {nodes.length > 0 && edges.length === 0 ? <div className="canvas-guide" role="note"><strong>Build the first path</strong><span>For Hello World, add <b>Text Input</b> and <b>Text Output</b>. Set the input value, connect <b>Start → Text Output.Start</b> for flow, then connect <b>Text Input.Text → Text Output.Input</b> for data.</span></div> : null}
+      {nodes.length > 0 && edges.length === 0 ? <div className="canvas-guide" role="note"><strong>Build the first path</strong><span>For Hello World, add <b>Text Input</b> and <b>Text Output</b>, make Text Input the entrypoint, then connect <b>Text Input.Text → Text Output.Input</b>. Data connections activate their downstream node; use Flow only when execution order has no data dependency.</span></div> : null}
       {!nodes.length ? <div className="canvas-empty-hint">Add a node to start building this canvas.</div> : null}
       {nodeLibraryOpen ? <NodeLibrary onAdd={onAddNode} onClose={onCloseNodeLibrary} /> : null}
       {runHistoryOpen ? <RunHistoryPanel canvas={canvas} runs={runs} onClose={onCloseRunHistory} /> : null}
@@ -1979,7 +1979,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
     const targetPort = target.ports.find((port) => port.id === edge.targetPortId);
     if (!sourcePort || !targetPort) return { valid: false, message: "A connection points to a missing port." };
   }
-  for (const edge of runtimeGraph.edges.filter((edge) => edge.kind === "control")) {
+  for (const edge of runtimeGraph.edges.filter((edge) => edge.kind === "control" || edge.kind === "data" || edge.kind === "event")) {
     const next = adjacency.get(edge.source.nodeId) ?? [];
     next.push(edge.target.nodeId);
     adjacency.set(edge.source.nodeId, next);
