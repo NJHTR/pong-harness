@@ -943,7 +943,10 @@ fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static 
         {
             return Err("An edge connects incompatible ports");
         }
-        if matches!(edge.kind, PortKind::Flow) {
+        if matches!(
+            edge.kind,
+            PortKind::Flow | PortKind::Data | PortKind::Event | PortKind::Resource
+        ) {
             adjacency
                 .entry(edge.source_node_id)
                 .or_default()
@@ -961,79 +964,68 @@ fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static 
         }
     }
     if nodes.iter().any(|node| {
-        !visited.contains(&node.id) && !matches!(node.kind.as_str(), "input.text" | "input.file")
+        !visited.contains(&node.id)
+            && !matches!(
+                node.kind.as_str(),
+                "input.text" | "input.file" | "workspace.scan"
+            )
     }) {
         return Err("Every required node must be reachable from the selected entrypoint");
     }
     Ok(())
 }
 
-fn first_interactive_node(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HostExecutionPlan {
+    entrypoint_node_id: Uuid,
+    node_order: Vec<Uuid>,
+}
+
+fn compile_host_execution_plan(
     store: &Store,
     canvas_id: Uuid,
-    completed_node_ids: &[Uuid],
-) -> Option<(Uuid, String)> {
-    let canvas = store.canvases.get(&canvas_id)?;
-    let entrypoint_id = canvas.default_entrypoint_node_id?;
-    let nodes = store
-        .nodes
-        .values()
-        .filter(|node| node.canvas_id == canvas_id)
-        .map(|node| (node.id, node))
-        .collect::<HashMap<_, _>>();
-    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-    for edge in store
+) -> Result<HostExecutionPlan, &'static str> {
+    validate_canvas_graph(store, canvas_id)?;
+    let entrypoint_node_id = store
+        .canvases
+        .get(&canvas_id)
+        .and_then(|canvas| canvas.default_entrypoint_node_id)
+        .ok_or("The canvas has no manual entrypoint")?;
+    let mut flow_edges = store
         .edges
         .values()
-        .filter(|edge| edge.canvas_id == canvas_id)
-    {
-        if matches!(edge.kind, PortKind::Flow) {
-            adjacency
-                .entry(edge.source_node_id)
-                .or_default()
-                .push(edge.target_node_id);
-        }
+        .filter(|edge| {
+            edge.canvas_id == canvas_id
+                && matches!(
+                    edge.kind,
+                    PortKind::Flow | PortKind::Data | PortKind::Event | PortKind::Resource
+                )
+        })
+        .collect::<Vec<_>>();
+    flow_edges.sort_by_key(|edge| edge.id);
+    let mut adjacency = HashMap::<Uuid, Vec<Uuid>>::new();
+    for edge in flow_edges {
+        adjacency
+            .entry(edge.source_node_id)
+            .or_default()
+            .push(edge.target_node_id);
     }
-    let mut queue = std::collections::VecDeque::from([entrypoint_id]);
+    let mut node_order = Vec::new();
     let mut visited = std::collections::HashSet::new();
-    let completed = completed_node_ids
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>();
+    let mut queue = std::collections::VecDeque::from([entrypoint_node_id]);
     while let Some(node_id) = queue.pop_front() {
         if !visited.insert(node_id) {
             continue;
         }
-        let candidate = nodes.get(&node_id);
-        let configured_text = candidate
-            .and_then(|node| node.config.get("inputValue"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty());
-        if !completed.contains(&node_id)
-            && candidate.is_some_and(|node| {
-                matches!(node.kind.as_str(), "task.manual")
-                    || (node.kind == "input.text" && !configured_text)
-            })
-        {
-            let node = nodes.get(&node_id)?;
-            let prompt = node
-                .config
-                .get("instruction")
-                .or_else(|| node.config.get("inputValue"))
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| match node.kind.as_str() {
-                    "task.manual" => format!("Complete the manual task: {}", node.name),
-                    _ => format!("Enter a value for {}", node.name),
-                });
-            return Some((node_id, prompt));
-        }
+        node_order.push(node_id);
         if let Some(next) = adjacency.get(&node_id) {
             queue.extend(next.iter().copied());
         }
     }
-    None
+    Ok(HostExecutionPlan {
+        entrypoint_node_id,
+        node_order,
+    })
 }
 
 fn node_text_value(
@@ -1092,47 +1084,51 @@ fn resolve_text_output(
 
     let mut values = Vec::with_capacity(output_nodes.len());
     for output_node in output_nodes {
-        let input_port = output_node
-            .ports
-            .iter()
-            .find(|port| port.name == "Input" && matches!(port.direction, PortDirection::Input))
-            .ok_or("Text Output is missing its Input port")?;
-        let edge = store
-            .edges
-            .values()
-            .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == input_port.id)
-            .ok_or("Connect a text value to Text Output.Input before running")?;
-        let source = store
-            .nodes
-            .get(&edge.source_node_id)
-            .ok_or_else(|| "Text Output source node was not found".to_string())?;
-        match source.kind.as_str() {
-            "input.text" => {
-                let value = node_text_value(source, node_values).ok_or_else(|| {
-                    "Set a value on the connected Text Input node before running".to_string()
-                })?;
-                values.push(value);
-            }
-            "workspace.scan" => {
-                let scan = resolve_workspace_scan(store, canvas_id)
-                    .map_err(|_| "Workspace scan could not produce output".to_string())?
-                    .ok_or_else(|| "Workspace scan did not produce output".to_string())?;
-                values.push(scan);
-            }
-            "workspace.analyze" => {
-                let report = resolve_project_analysis(store, canvas_id, node_values)?
-                    .ok_or_else(|| "Project analysis did not produce a report".to_string())?;
-                values.push(report);
-            }
-            _ => {
-                return Err(
-                    "Text Output currently accepts Text Input, Workspace Scan, or Project Analyze nodes"
-                        .to_string(),
-                );
-            }
-        }
+        values.push(resolve_output_node(
+            store,
+            canvas_id,
+            output_node,
+            node_values,
+        )?);
     }
     Ok(Some(values.join("\n")))
+}
+
+fn resolve_output_node(
+    store: &Store,
+    canvas_id: Uuid,
+    output_node: &CanvasNode,
+    node_values: &HashMap<Uuid, String>,
+) -> Result<String, String> {
+    let input_port = output_node
+        .ports
+        .iter()
+        .find(|port| port.name == "Input" && matches!(port.direction, PortDirection::Input))
+        .ok_or_else(|| "Text Output is missing its Input port".to_string())?;
+    let edge = store
+        .edges
+        .values()
+        .find(|edge| edge.canvas_id == canvas_id && edge.target_port_id == input_port.id)
+        .ok_or_else(|| "Connect a text value to Text Output.Input before running".to_string())?;
+    let source = store
+        .nodes
+        .get(&edge.source_node_id)
+        .ok_or_else(|| "Text Output source node was not found".to_string())?;
+    if let Some(value) = node_values.get(&source.id) {
+        return Ok(value.clone());
+    }
+    match source.kind.as_str() {
+        "input.text" => node_text_value(source, node_values)
+            .ok_or_else(|| "Set a value on the connected Text Input node before running".to_string()),
+        "workspace.scan" => resolve_workspace_scan(store, canvas_id)?
+            .ok_or_else(|| "Workspace scan did not produce output".to_string()),
+        "workspace.analyze" => resolve_project_analysis(store, canvas_id, node_values)?
+            .ok_or_else(|| "Project analysis did not produce a report".to_string()),
+        _ => Err(
+            "Text Output currently accepts Text Input, Workspace Scan, or Project Analyze nodes"
+                .to_string(),
+        ),
+    }
 }
 
 fn resolve_workspace_scan(store: &Store, canvas_id: Uuid) -> Result<Option<String>, String> {
@@ -1675,6 +1671,106 @@ fn resolve_run_output(
         return Ok(Some(value));
     }
     resolve_workspace_scan(store, canvas_id)
+}
+
+#[derive(Debug)]
+enum HostRunAdvance {
+    Waiting {
+        node_id: Uuid,
+        prompt: String,
+        completed_node_ids: Vec<Uuid>,
+        node_values: HashMap<Uuid, String>,
+    },
+    Succeeded {
+        result: Option<String>,
+        completed_node_ids: Vec<Uuid>,
+        node_values: HashMap<Uuid, String>,
+    },
+}
+
+fn advance_host_execution(
+    store: &Store,
+    canvas_id: Uuid,
+    completed_node_ids: &[Uuid],
+    initial_node_values: &HashMap<Uuid, String>,
+) -> Result<HostRunAdvance, String> {
+    let plan = compile_host_execution_plan(store, canvas_id).map_err(str::to_string)?;
+    let mut completed = completed_node_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut ordered_completed = completed_node_ids.to_vec();
+    let mut node_values = initial_node_values.clone();
+    let mut final_result = None;
+
+    for node_id in plan.node_order {
+        if completed.contains(&node_id) {
+            continue;
+        }
+        let node = store
+            .nodes
+            .get(&node_id)
+            .ok_or_else(|| format!("Execution plan references missing node {node_id}"))?;
+        match node.kind.as_str() {
+            "trigger.start" => {}
+            "input.text" => {
+                if let Some(value) = node_text_value(node, &node_values) {
+                    node_values.insert(node.id, value);
+                } else {
+                    return Ok(HostRunAdvance::Waiting {
+                        node_id: node.id,
+                        prompt: format!("Enter a value for {}", node.name),
+                        completed_node_ids: ordered_completed,
+                        node_values,
+                    });
+                }
+            }
+            "task.manual" => {
+                let prompt = node
+                    .config
+                    .get("instruction")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("Complete the manual task: {}", node.name));
+                return Ok(HostRunAdvance::Waiting {
+                    node_id: node.id,
+                    prompt,
+                    completed_node_ids: ordered_completed,
+                    node_values,
+                });
+            }
+            "workspace.scan" => {
+                let value = resolve_workspace_scan(store, canvas_id)?
+                    .ok_or_else(|| "Workspace scan did not produce output".to_string())?;
+                node_values.insert(node.id, value.clone());
+                final_result = Some(value);
+            }
+            "workspace.analyze" => {
+                let value = resolve_project_analysis(store, canvas_id, &node_values)?
+                    .ok_or_else(|| "Project analysis did not produce a report".to_string())?;
+                node_values.insert(node.id, value.clone());
+                final_result = Some(value);
+            }
+            "output.text" => {
+                let value = resolve_output_node(store, canvas_id, node, &node_values)?;
+                node_values.insert(node.id, value.clone());
+                final_result = Some(value);
+            }
+            kind => return Err(format!("Node kind {kind} is not executable by the local Host")),
+        }
+        completed.insert(node.id);
+        ordered_completed.push(node.id);
+    }
+
+    if final_result.is_none() {
+        final_result = resolve_run_output(store, canvas_id, &node_values)?;
+    }
+    Ok(HostRunAdvance::Succeeded {
+        result: final_result,
+        completed_node_ids: ordered_completed,
+        node_values,
+    })
 }
 
 async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspace>> {
@@ -2322,93 +2418,101 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
         tokio::task::yield_now().await;
         let mut store = state.inner.lock().unwrap();
         let previous = store.clone();
-        let (canvas_id, run_id, result, interactive, output) = {
+        let (canvas_id, advance) = {
             let Some(run) = store.runs.get(&run_id) else {
                 return;
             };
             if !matches!(run.status, RunStatus::Running) {
                 return;
             }
-            let canvas_id = run.canvas_id;
-            let result = validate_canvas_graph(&store, canvas_id);
-            let interactive = result
-                .as_ref()
-                .ok()
-                .and_then(|_| first_interactive_node(&store, canvas_id, &run.completed_node_ids));
-            let output = if result.is_ok() && interactive.is_none() {
-                resolve_run_output(&store, canvas_id, &run.node_values)
-            } else {
-                Ok(None)
-            };
-            let Some(run) = store.runs.get_mut(&run_id) else {
-                return;
-            };
-            if let Some((node_id, prompt)) = &interactive {
-                run.status = RunStatus::WaitingInput;
-                run.current_node_id = Some(*node_id);
-                run.input_prompt = Some(prompt.clone());
-            } else if let Err(reason) = output.as_ref() {
-                run.status = RunStatus::Failed;
-                run.input_prompt = Some((*reason).to_string());
-                run.finished_at = Some(now());
-            } else {
-                run.status = if result.is_ok() {
-                    RunStatus::Succeeded
-                } else {
-                    RunStatus::Failed
+            (
+                run.canvas_id,
+                advance_host_execution(
+                    &store,
+                    run.canvas_id,
+                    &run.completed_node_ids,
+                    &run.node_values,
+                ),
+            )
+        };
+        let canvas_name = store
+            .canvases
+            .get(&canvas_id)
+            .map(|canvas| canvas.name.clone())
+            .unwrap_or_else(|| "Canvas".to_string());
+        let (title, message, severity, canvas_status) = match advance {
+            Ok(HostRunAdvance::Waiting {
+                node_id,
+                prompt,
+                completed_node_ids,
+                node_values,
+            }) => {
+                let Some(run) = store.runs.get_mut(&run_id) else {
+                    return;
                 };
-                if let Ok(Some(value)) = &output {
-                    run.result = Some(value.clone());
-                }
-                run.finished_at = Some(now());
+                run.status = RunStatus::WaitingInput;
+                run.current_node_id = Some(node_id);
+                run.input_prompt = Some(prompt.clone());
+                run.completed_node_ids = completed_node_ids;
+                run.node_values = node_values;
+                (
+                    "Run waiting for input".to_string(),
+                    format!("{canvas_name} is waiting for a local input: {prompt}."),
+                    "info".to_string(),
+                    RunStatus::WaitingInput,
+                )
             }
-            (canvas_id, run.id, result, interactive, output)
+            Ok(HostRunAdvance::Succeeded {
+                result,
+                completed_node_ids,
+                node_values,
+            }) => {
+                let Some(run) = store.runs.get_mut(&run_id) else {
+                    return;
+                };
+                run.status = RunStatus::Succeeded;
+                run.current_node_id = None;
+                run.input_prompt = None;
+                run.result = result.clone();
+                run.completed_node_ids = completed_node_ids;
+                run.node_values = node_values;
+                run.finished_at = Some(now());
+                (
+                    if result.is_some() {
+                        "Output produced".to_string()
+                    } else {
+                        "Run completed".to_string()
+                    },
+                    if result.is_some() {
+                        format!("{canvas_name} produced a structured result.")
+                    } else {
+                        format!("{canvas_name} completed its execution plan.")
+                    },
+                    "success".to_string(),
+                    RunStatus::Succeeded,
+                )
+            }
+            Err(reason) => {
+                let Some(run) = store.runs.get_mut(&run_id) else {
+                    return;
+                };
+                run.status = RunStatus::Failed;
+                run.current_node_id = None;
+                run.input_prompt = Some(reason.clone());
+                run.finished_at = Some(now());
+                (
+                    "Run failed".to_string(),
+                    format!("{canvas_name} failed during graph execution: {reason}."),
+                    "error".to_string(),
+                    RunStatus::Failed,
+                )
+            }
         };
         let Some(canvas) = store.canvases.get_mut(&canvas_id) else {
             *store = previous;
             return;
         };
-        canvas.status = if interactive.is_some() {
-            RunStatus::WaitingInput
-        } else if result.is_ok() && output.is_ok() {
-            RunStatus::Succeeded
-        } else {
-            RunStatus::Failed
-        };
-        let (title, message, severity) = if let Some((_, prompt)) = interactive {
-            (
-                "Run waiting for input".to_string(),
-                format!("{} is waiting for a local input: {}.", canvas.name, prompt),
-                "info".to_string(),
-            )
-        } else if let Err(reason) = output.as_ref() {
-            (
-                "Run failed".to_string(),
-                format!("{} could not produce output: {}.", canvas.name, reason),
-                "error".to_string(),
-            )
-        } else if let Ok(Some(value)) = output.as_ref() {
-            (
-                "Output produced".to_string(),
-                format!("{} produced: {}.", canvas.name, value),
-                "success".to_string(),
-            )
-        } else if let Err(reason) = result {
-            (
-                "Run failed".to_string(),
-                format!("{} failed before execution: {}.", canvas.name, reason),
-                "error".to_string(),
-            )
-        } else {
-            (
-                "Run completed".to_string(),
-                format!(
-                    "{} completed. No interactive task node was found.",
-                    canvas.name
-                ),
-                "success".to_string(),
-            )
-        };
+        canvas.status = canvas_status;
         let notification = Notification {
             id: Uuid::new_v4(),
             title,
@@ -2966,6 +3070,32 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str().unwrap().ends_with("DemoApplication.java"))
         );
+        let plan = compile_host_execution_plan(&store, canvas_id).unwrap();
+        assert_eq!(plan.entrypoint_node_id, input_id);
+        assert_eq!(plan.node_order, vec![input_id, analyze_id]);
+        match advance_host_execution(&store, canvas_id, &[], &HashMap::new()).unwrap() {
+            HostRunAdvance::Waiting {
+                node_id, prompt, ..
+            } => {
+                assert_eq!(node_id, input_id);
+                assert!(prompt.contains("Analysis request"));
+            }
+            HostRunAdvance::Succeeded { .. } => panic!("empty input must pause the run"),
+        }
+        match advance_host_execution(&store, canvas_id, &[input_id], &values).unwrap() {
+            HostRunAdvance::Succeeded {
+                result,
+                completed_node_ids,
+                node_values,
+            } => {
+                assert_eq!(completed_node_ids, vec![input_id, analyze_id]);
+                assert!(node_values.contains_key(&analyze_id));
+                let result: serde_json::Value =
+                    serde_json::from_str(result.as_deref().unwrap()).unwrap();
+                assert_eq!(result["request"], "Analyze the backend carefully");
+            }
+            HostRunAdvance::Waiting { .. } => panic!("submitted input must resume the plan"),
+        }
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3526,6 +3656,225 @@ mod tests {
                 .unwrap();
         assert_eq!(run.canvas_id, canvas_id);
         assert_eq!(run.revision, 0);
+    }
+
+    #[tokio::test]
+    async fn http_run_waits_for_input_and_resumes_through_project_analysis() {
+        let root = std::env::temp_dir().join(format!("pong-host-http-analysis-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src/main/java")).unwrap();
+        std::fs::write(
+            root.join("pom.xml"),
+            "<project><groupId>com.example</groupId><artifactId>http-demo</artifactId></project>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main/java/DemoApplication.java"),
+            "class DemoApplication {}",
+        )
+        .unwrap();
+
+        let state = test_state(test_database());
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let analyze_id = Uuid::new_v4();
+        let output_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let analyze_ports = default_ports(analyze_id, "workspace.analyze");
+        let output_ports = default_ports(output_id, "output.text");
+        let input_text_port = input_ports
+            .iter()
+            .find(|port| port.name == "Text")
+            .unwrap()
+            .id;
+        let analyze_request_port = analyze_ports
+            .iter()
+            .find(|port| port.name == "Request")
+            .unwrap()
+            .id;
+        let analyze_report_port = analyze_ports
+            .iter()
+            .find(|port| port.name == "Report")
+            .unwrap()
+            .id;
+        let output_input_port = output_ports
+            .iter()
+            .find(|port| port.name == "Input")
+            .unwrap()
+            .id;
+        {
+            let mut store = state.inner.lock().unwrap();
+            store.workspaces.insert(
+                workspace_id,
+                Workspace {
+                    id: workspace_id,
+                    name: "HTTP Project".to_string(),
+                    path: root.to_string_lossy().to_string(),
+                    updated_at: now(),
+                },
+            );
+            store.canvases.insert(
+                canvas_id,
+                Canvas {
+                    id: canvas_id,
+                    workspace_id,
+                    name: "HTTP Analysis".to_string(),
+                    status: RunStatus::Idle,
+                    default_entrypoint_node_id: Some(input_id),
+                    revision: 0,
+                    draft_revision: 0,
+                    draft_dirty: false,
+                    updated_at: now(),
+                },
+            );
+            for node in [
+                CanvasNode {
+                    id: input_id,
+                    canvas_id,
+                    name: "Analysis Request".to_string(),
+                    kind: "input.text".to_string(),
+                    ports: input_ports,
+                    config: serde_json::Map::new(),
+                },
+                CanvasNode {
+                    id: analyze_id,
+                    canvas_id,
+                    name: "Project Analyze".to_string(),
+                    kind: "workspace.analyze".to_string(),
+                    ports: analyze_ports,
+                    config: serde_json::Map::new(),
+                },
+                CanvasNode {
+                    id: output_id,
+                    canvas_id,
+                    name: "Analysis Report".to_string(),
+                    kind: "output.text".to_string(),
+                    ports: output_ports,
+                    config: serde_json::Map::new(),
+                },
+            ] {
+                store.nodes.insert(node.id, node);
+            }
+            for edge in [
+                CanvasEdge {
+                    id: Uuid::new_v4(),
+                    canvas_id,
+                    source_node_id: input_id,
+                    source_port_id: input_text_port,
+                    target_node_id: analyze_id,
+                    target_port_id: analyze_request_port,
+                    kind: PortKind::Data,
+                },
+                CanvasEdge {
+                    id: Uuid::new_v4(),
+                    canvas_id,
+                    source_node_id: analyze_id,
+                    source_port_id: analyze_report_port,
+                    target_node_id: output_id,
+                    target_port_id: output_input_port,
+                    kind: PortKind::Data,
+                },
+            ] {
+                store.edges.insert(edge.id, edge);
+            }
+        }
+
+        let app = router(state.clone(), test_security());
+        let start_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/canvases/{canvas_id}/runs"))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "revision": 0,
+                            "entrypointId": format!("{canvas_id}:default"),
+                            "idempotencyKey": "http-project-analysis"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(start_response.status(), StatusCode::OK);
+        let started: Run = serde_json::from_slice(
+            &to_bytes(start_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        for _ in 0..100 {
+            if state
+                .inner
+                .lock()
+                .unwrap()
+                .runs
+                .get(&started.id)
+                .is_some_and(|run| matches!(run.status, RunStatus::WaitingInput))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(state
+            .inner
+            .lock()
+            .unwrap()
+            .runs
+            .get(&started.id)
+            .is_some_and(|run| matches!(run.status, RunStatus::WaitingInput)));
+
+        let submit_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{}/input", started.id))
+                    .header(header::HOST, HOST_AUTHORITY)
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"value":"Analyze this backend carefully"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(submit_response.status(), StatusCode::OK);
+        for _ in 0..100 {
+            if state
+                .inner
+                .lock()
+                .unwrap()
+                .runs
+                .get(&started.id)
+                .is_some_and(|run| matches!(run.status, RunStatus::Succeeded))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let result = state
+            .inner
+            .lock()
+            .unwrap()
+            .runs
+            .get(&started.id)
+            .and_then(|run| run.result.clone())
+            .expect("analysis result");
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result["request"], "Analyze this backend carefully");
+        assert!(
+            result["projectTypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "Java / Maven")
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
