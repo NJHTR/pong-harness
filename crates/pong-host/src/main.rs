@@ -19,9 +19,9 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env,
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, read_dir},
     io,
-    path::PathBuf,
+    path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -894,7 +894,13 @@ fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static 
     if !nodes.iter().any(|node| node.id == entrypoint_id) {
         return Err("The default entrypoint node was not found");
     }
-    let supported = ["trigger.start", "input.text", "task.manual", "output.text"];
+    let supported = [
+        "trigger.start",
+        "input.text",
+        "task.manual",
+        "output.text",
+        "workspace.scan",
+    ];
     if nodes
         .iter()
         .any(|node| !supported.contains(&node.kind.as_str()))
@@ -1052,17 +1058,151 @@ fn resolve_text_output(store: &Store, canvas_id: Uuid) -> Result<Option<String>,
         let source = store
             .nodes
             .get(&edge.source_node_id)
-            .filter(|node| node.kind == "input.text")
-            .ok_or("Text Output currently accepts values from Text Input nodes")?;
-        let value = source
-            .config
-            .get("inputValue")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or("Set a value on the connected Text Input node before running")?;
-        values.push(value.trim().to_string());
+            .ok_or("Text Output source node was not found")?;
+        match source.kind.as_str() {
+            "input.text" => {
+                let value = source
+                    .config
+                    .get("inputValue")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("Set a value on the connected Text Input node before running")?;
+                values.push(value.trim().to_string());
+            }
+            "workspace.scan" => {
+                let scan = resolve_workspace_scan(store, canvas_id)
+                    .map_err(|_| "Workspace scan could not produce output")?
+                    .ok_or("Workspace scan did not produce output")?;
+                values.push(scan);
+            }
+            _ => return Err("Text Output currently accepts Text Input or Workspace Scan nodes"),
+        }
     }
     Ok(Some(values.join("\n")))
+}
+
+fn resolve_workspace_scan(store: &Store, canvas_id: Uuid) -> Result<Option<String>, String> {
+    let scan_nodes = store
+        .nodes
+        .values()
+        .filter(|node| node.canvas_id == canvas_id && node.kind == "workspace.scan")
+        .collect::<Vec<_>>();
+    if scan_nodes.is_empty() {
+        return Ok(None);
+    }
+
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .ok_or_else(|| "Canvas was not found".to_string())?;
+    let workspace = store
+        .workspaces
+        .get(&canvas.workspace_id)
+        .ok_or_else(|| "Workspace was not found".to_string())?;
+    let root = FsPath::new(&workspace.path);
+    if !root.is_dir() {
+        return Err(format!(
+            "Workspace path is not an accessible directory: {}",
+            root.display()
+        ));
+    }
+
+    let max_entries = scan_nodes
+        .iter()
+        .filter_map(|node| {
+            node.config
+                .get("maxEntries")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .min()
+        .unwrap_or(2000)
+        .clamp(1, 10_000) as usize;
+    let max_depth = scan_nodes
+        .iter()
+        .filter_map(|node| {
+            node.config
+                .get("maxDepth")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .min()
+        .unwrap_or(12)
+        .clamp(1, 32) as usize;
+    let ignored = [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".idea",
+        ".gradle",
+        ".venv",
+    ];
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut files = 0usize;
+    let mut directories = 0usize;
+    let mut entries = Vec::new();
+    let mut truncated = false;
+
+    while let Some((directory, depth)) = pending.pop() {
+        let listing = read_dir(&directory)
+            .map_err(|error| format!("Unable to read {}: {error}", directory.display()))?;
+        for item in listing {
+            if files + directories >= max_entries {
+                truncated = true;
+                break;
+            }
+            let item =
+                item.map_err(|error| format!("Unable to inspect workspace entry: {error}"))?;
+            let path = item.path();
+            let name = item.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                if ignored.contains(&name.as_str()) {
+                    continue;
+                }
+                directories += 1;
+                if depth < max_depth {
+                    pending.push((path.clone(), depth + 1));
+                } else {
+                    truncated = true;
+                }
+            } else if path.is_file() {
+                files += 1;
+                if entries.len() < 200 {
+                    let relative = path
+                        .strip_prefix(root)
+                        .unwrap_or(path.as_path())
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    entries.push(relative);
+                }
+            }
+        }
+        if truncated {
+            break;
+        }
+    }
+    entries.sort();
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "workspacePath": workspace.path,
+        "files": files,
+        "directories": directories,
+        "truncated": truncated,
+        "sampleFiles": entries,
+        "limits": {
+            "maxEntries": max_entries,
+            "maxDepth": max_depth
+        }
+    }))
+    .map(Some)
+    .map_err(|error| format!("Unable to serialize workspace scan result: {error}"))
+}
+
+fn resolve_run_output(store: &Store, canvas_id: Uuid) -> Result<Option<String>, String> {
+    if let Some(value) = resolve_text_output(store, canvas_id).map_err(str::to_string)? {
+        return Ok(Some(value));
+    }
+    resolve_workspace_scan(store, canvas_id)
 }
 
 async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<Workspace>> {
@@ -1288,6 +1428,11 @@ fn default_ports(node_id: Uuid, kind: &str) -> Vec<CanvasPort> {
             PortDirection::Output,
             PortKind::Event,
         )],
+        "workspace.scan" => vec![
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "Result", PortDirection::Output, PortKind::Data),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
+        ],
         _ => vec![
             port(node_id, "Input", PortDirection::Input, PortKind::Data),
             port(node_id, "Start", PortDirection::Input, PortKind::Flow),
@@ -1713,7 +1858,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 .ok()
                 .and_then(|_| first_interactive_node(&store, canvas_id, &run.completed_node_ids));
             let output = if result.is_ok() && interactive.is_none() {
-                resolve_text_output(&store, canvas_id)
+                resolve_run_output(&store, canvas_id)
             } else {
                 Ok(None)
             };
@@ -2177,6 +2322,73 @@ mod tests {
             resolve_text_output(&store, canvas_id).unwrap().as_deref(),
             Some("Hello World")
         );
+    }
+
+    #[test]
+    fn workspace_scan_reads_only_a_bounded_file_inventory() {
+        let root = std::env::temp_dir().join(format!("pong-host-scan-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("src").join("main.java"), "class Main {}").unwrap();
+        std::fs::write(root.join("README.md"), "# Demo").unwrap();
+        std::fs::write(root.join("node_modules").join("ignored.js"), "ignored").unwrap();
+
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let mut store = Store::default();
+        store.workspaces.insert(
+            workspace_id,
+            Workspace {
+                id: workspace_id,
+                name: "Scan Workspace".to_string(),
+                path: root.to_string_lossy().to_string(),
+                updated_at: now(),
+            },
+        );
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id,
+                name: "Scan".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: None,
+                revision: 0,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        let mut config = serde_json::Map::new();
+        config.insert("maxEntries".to_string(), serde_json::json!(20));
+        config.insert("maxDepth".to_string(), serde_json::json!(4));
+        store.nodes.insert(
+            node_id,
+            CanvasNode {
+                id: node_id,
+                canvas_id,
+                name: "Workspace Scan".to_string(),
+                kind: "workspace.scan".to_string(),
+                ports: default_ports(node_id, "workspace.scan"),
+                config,
+            },
+        );
+
+        let result = resolve_workspace_scan(&store, canvas_id).unwrap().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["files"], 2);
+        assert_eq!(json["directories"], 1);
+        assert_eq!(json["truncated"], false);
+        assert!(
+            json["sampleFiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| !item.as_str().unwrap().contains("node_modules"))
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
