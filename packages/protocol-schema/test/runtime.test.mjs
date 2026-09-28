@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateConnection, validateGraph } from "../src/runtime.ts";
+import { compileExecutionPlan, validateConnection, validateGraph } from "../src/runtime.ts";
 
 const port = (overrides = {}) => ({
   portId: overrides.portId ?? "port",
@@ -106,4 +106,62 @@ test("runtime validation rejects self-loop edges", () => {
   };
 
   assert.equal(validateGraph(graph, "fragment").errors[0].code, "SELF_LOOP");
+});
+
+test("execution plan compilation produces deterministic graph VM instructions", () => {
+  const startOutput = port({ portId: "start-out", nodeId: "start", name: "Start", direction: "output", kind: "control", valueType: "any" });
+  const taskInput = port({ portId: "task-in", nodeId: "task", name: "Start", direction: "input", kind: "control", valueType: "any", required: true });
+  const taskOutput = port({ portId: "task-out", nodeId: "task", name: "Result", direction: "output", kind: "data", valueType: "text" });
+  const outputInput = port({ portId: "output-in", nodeId: "output", name: "Input", direction: "input", kind: "data", valueType: "text", required: true, cardinality: "one" });
+  const graph = {
+    schemaVersion: "1.0.0",
+    nodes: [
+      { ...node("start", [], [startOutput]), category: "trigger" },
+      { ...node("task", [taskInput], [taskOutput]), category: "agent" },
+      { ...node("output", [outputInput], []), category: "output" },
+    ],
+    edges: [
+      {
+        edgeId: "control-edge",
+        canvasId: "canvas",
+        source: { nodeId: "start", portId: "start-out" },
+        target: { nodeId: "task", portId: "task-in" },
+        kind: "control",
+        enabled: true,
+      },
+      {
+        edgeId: "data-edge",
+        canvasId: "canvas",
+        source: { nodeId: "task", portId: "task-out" },
+        target: { nodeId: "output", portId: "output-in" },
+        kind: "data",
+        enabled: true,
+      },
+    ],
+    entrypoints: [{
+      entrypointId: "manual",
+      name: "Manual",
+      kind: "manual",
+      targetNodeId: "start",
+      manualInvocable: true,
+      enabled: true,
+    }],
+    defaultEntrypointId: "manual",
+    triggers: [],
+  };
+
+  const compiled = compileExecutionPlan(graph, "workflow");
+  assert.equal(compiled.valid, true);
+  assert.deepEqual(compiled.plan?.nodeOrder, ["start", "task", "output"]);
+  assert.deepEqual(compiled.plan?.instructions.map((instruction) => instruction.op), [
+    "enter",
+    "dispatch_node",
+    "route_control",
+    "dispatch_node",
+    "route_data",
+    "dispatch_node",
+    "return",
+  ]);
+  assert.equal(compiled.plan?.effectSummary.hasExternalEffects, true);
+  assert.deepEqual(compiled.plan?.effectSummary.edgeKinds, ["control", "data"]);
 });

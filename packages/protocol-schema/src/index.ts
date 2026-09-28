@@ -45,6 +45,8 @@ export type {
   Edge,
   EdgeKind,
   EntrypointKind as RuntimeEntrypointKind,
+  ExecutionPlan,
+  ExecutionPlanCompilation,
   GraphDocument,
   GraphPort as RuntimeGraphPort,
   GraphValidation,
@@ -66,8 +68,9 @@ export type {
   SemVer,
   Timestamp,
   TriggerBinding,
+  RuntimeInstruction,
 } from "./runtime";
-export { validateGraph as validateRuntimeGraph, validateConnection as validateRuntimeConnection } from "./runtime";
+export { compileExecutionPlan, validateGraph as validateRuntimeGraph, validateConnection as validateRuntimeConnection } from "./runtime";
 
 import type { CanvasPort, SaveRevisionRequest, StartRunRequest, SubmitRunInputRequest, UpdateNodeRequest } from "./host-wire.generated";
 

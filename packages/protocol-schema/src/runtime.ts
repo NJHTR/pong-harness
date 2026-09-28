@@ -279,6 +279,36 @@ export interface GraphValidation {
   warnings: Array<{ code: string; message: string; nodeId?: Id }>;
 }
 
+export type RuntimeInstruction =
+  | { op: "enter"; entrypointId: Id; targetNodeId: Id }
+  | { op: "dispatch_node"; nodeId: Id; definition: DefinitionRef; category: NodeCategory }
+  | { op: "route_data"; edgeId: Id; source: PortEndpoint; target: PortEndpoint; mapping?: MappingExpression }
+  | { op: "route_control"; edgeId: Id; source: PortEndpoint; target: PortEndpoint }
+  | { op: "route_event"; edgeId: Id; source: PortEndpoint; target: PortEndpoint }
+  | { op: "route_error"; edgeId: Id; source: PortEndpoint; target: PortEndpoint }
+  | { op: "return"; nodeIds: Id[] };
+
+export interface ExecutionPlan {
+  schemaVersion: SemVer;
+  graphSchemaVersion: SemVer;
+  entrypointId: Id;
+  startNodeId: Id;
+  nodeOrder: Id[];
+  instructions: RuntimeInstruction[];
+  effectSummary: {
+    nodeCategories: NodeCategory[];
+    edgeKinds: EdgeKind[];
+    hasExternalEffects: boolean;
+  };
+}
+
+export interface ExecutionPlanCompilation {
+  valid: boolean;
+  plan?: ExecutionPlan;
+  errors: GraphValidation["errors"];
+  warnings: GraphValidation["warnings"];
+}
+
 function compatibleValueTypes(source: PortValueType, target: PortValueType): boolean {
   return source === "any" || target === "any" || source === target;
 }
@@ -390,4 +420,100 @@ export function validateGraph(graph: GraphDocument, canvasKind: CanvasKind): Gra
   }
 
   return { valid: errors.length === 0, errors, warnings };
+}
+
+const externallyEffectfulCategories = new Set<NodeCategory>(["agent", "tool", "file", "console", "subcanvas", "approval", "resource"]);
+
+function uniqueSorted<T extends string>(values: T[]): T[] {
+  return Array.from(new Set(values)).sort();
+}
+
+function edgeInstruction(edge: Edge): RuntimeInstruction | undefined {
+  if (edge.kind === "data") return { op: "route_data", edgeId: edge.edgeId, source: edge.source, target: edge.target, ...(edge.mapping ? { mapping: edge.mapping } : {}) };
+  if (edge.kind === "control" || edge.kind === "compensation") return { op: "route_control", edgeId: edge.edgeId, source: edge.source, target: edge.target };
+  if (edge.kind === "event") return { op: "route_event", edgeId: edge.edgeId, source: edge.source, target: edge.target };
+  if (edge.kind === "error") return { op: "route_error", edgeId: edge.edgeId, source: edge.source, target: edge.target };
+  return undefined;
+}
+
+/**
+ * Compile a validated graph into a deterministic execution plan.
+ * This is a graph VM plan, not machine code: Host capabilities still execute
+ * file, process, network, Agent and child-canvas effects behind permission gates.
+ */
+export function compileExecutionPlan(graph: GraphDocument, canvasKind: CanvasKind, entrypointId = graph.defaultEntrypointId): ExecutionPlanCompilation {
+  const validation = validateGraph(graph, canvasKind);
+  const errors: GraphValidation["errors"] = [...validation.errors];
+  const warnings: GraphValidation["warnings"] = [...validation.warnings];
+  if (!entrypointId) {
+    errors.push({ code: "ENTRYPOINT_REQUIRED", message: "An execution plan requires an explicit entrypoint." });
+  }
+  const entrypoint = entrypointId ? graph.entrypoints.find((candidate) => candidate.entrypointId === entrypointId) : undefined;
+  if (entrypointId && !entrypoint) {
+    errors.push({ code: "ENTRYPOINT_NOT_FOUND", message: `Entrypoint ${entrypointId} was not found.` });
+  }
+  if (entrypoint && !entrypoint.enabled) {
+    errors.push({ code: "ENTRYPOINT_DISABLED", message: `Entrypoint ${entrypoint.name} is disabled.`, nodeId: entrypoint.targetNodeId });
+  }
+  if (errors.length || !entrypoint) {
+    return { valid: false, errors, warnings };
+  }
+
+  const nodes = new Map(graph.nodes.filter((node) => node.enabled).map((node) => [node.nodeId, node]));
+  const enabledEdges = graph.edges.filter((edge) => edge.enabled);
+  const activationEdges = enabledEdges
+    .filter((edge) => edge.kind === "control" || edge.kind === "data" || edge.kind === "event")
+    .sort((left, right) => left.edgeId.localeCompare(right.edgeId));
+  const adjacency = new Map<Id, Edge[]>();
+  for (const edge of activationEdges) {
+    adjacency.set(edge.source.nodeId, [...(adjacency.get(edge.source.nodeId) ?? []), edge]);
+  }
+
+  const nodeOrder: Id[] = [];
+  const visited = new Set<Id>();
+  const queue = [entrypoint.targetNodeId];
+  while (queue.length) {
+    const nodeId = queue.shift()!;
+    if (visited.has(nodeId)) continue;
+    const node = nodes.get(nodeId);
+    if (!node) continue;
+    visited.add(nodeId);
+    nodeOrder.push(nodeId);
+    for (const edge of adjacency.get(nodeId) ?? []) {
+      queue.push(edge.target.nodeId);
+    }
+  }
+
+  const routedEdges = enabledEdges
+    .filter((edge) => visited.has(edge.source.nodeId) || visited.has(edge.target.nodeId))
+    .sort((left, right) => left.edgeId.localeCompare(right.edgeId));
+  const instructions: RuntimeInstruction[] = [{ op: "enter", entrypointId: entrypoint.entrypointId, targetNodeId: entrypoint.targetNodeId }];
+  for (const nodeId of nodeOrder) {
+    const node = nodes.get(nodeId)!;
+    instructions.push({ op: "dispatch_node", nodeId: node.nodeId, definition: node.definition, category: node.category });
+    for (const edge of routedEdges.filter((candidate) => candidate.source.nodeId === nodeId)) {
+      const instruction = edgeInstruction(edge);
+      if (instruction) instructions.push(instruction);
+    }
+  }
+  instructions.push({ op: "return", nodeIds: nodeOrder });
+
+  return {
+    valid: true,
+    errors: [],
+    warnings,
+    plan: {
+      schemaVersion: "1.0.0",
+      graphSchemaVersion: graph.schemaVersion,
+      entrypointId: entrypoint.entrypointId,
+      startNodeId: entrypoint.targetNodeId,
+      nodeOrder,
+      instructions,
+      effectSummary: {
+        nodeCategories: uniqueSorted(nodeOrder.map((nodeId) => nodes.get(nodeId)!.category)),
+        edgeKinds: uniqueSorted(routedEdges.map((edge) => edge.kind)),
+        hasExternalEffects: nodeOrder.some((nodeId) => externallyEffectfulCategories.has(nodes.get(nodeId)!.category)),
+      },
+    },
+  };
 }
