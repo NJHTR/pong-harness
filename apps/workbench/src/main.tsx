@@ -870,11 +870,18 @@ function App({ client }: { client: HostClient }) {
       showNotice("Run already active", "Wait for the current canvas run to finish before sending another value.", "warning");
       return;
     }
-    const hasProjectAnalysisGraph = canvasNodes.some((node) => node.kind === "workspace.analyze")
-      && canvasNodes.some((node) => node.kind === "input.text");
-    if (isProjectAnalysisRequest(normalizedValue) && !hasProjectAnalysisGraph) {
-      await createProjectAnalysisWorkflow(normalizedValue);
-      return;
+    if (isProjectAnalysisRequest(normalizedValue)) {
+      const agentConfigured = agentKeyConfigured && Boolean(agentSettings.endpoint.trim()) && Boolean(agentSettings.model.trim());
+      const hasProjectAnalysisGraph = canvasNodes.some((node) => node.kind === "workspace.analyze")
+        && canvasNodes.some((node) => node.kind === "input.text")
+        && (!agentConfigured || (
+          canvasNodes.some((node) => node.kind === "workspace.context")
+          && canvasNodes.some((node) => node.kind === "agent.analyze")
+        ));
+      if (!hasProjectAnalysisGraph) {
+        await createProjectAnalysisWorkflow(normalizedValue);
+        return;
+      }
     }
     if (activeCanvas?.defaultEntrypointNodeId && canvasNodes.some((node) => node.kind === "input.text")) {
       await runCanvas(normalizedValue);
