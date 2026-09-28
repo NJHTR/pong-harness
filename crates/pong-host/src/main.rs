@@ -5042,6 +5042,217 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn project_context_executes_as_a_typed_graph_stage() {
+        let root = std::env::temp_dir().join(format!("pong-host-context-run-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"context-demo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn main() { println!(\"context demo\"); }\n",
+        )
+        .unwrap();
+
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let analyze_id = Uuid::new_v4();
+        let context_id = Uuid::new_v4();
+        let output_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let analyze_ports = default_ports(analyze_id, "workspace.analyze");
+        let context_ports = default_ports(context_id, "workspace.context");
+        let output_ports = default_ports(output_id, "output.text");
+        let find_port = |ports: &[CanvasPort], name: &str| {
+            ports.iter().find(|port| port.name == name).unwrap().id
+        };
+        let mut store = Store::default();
+        store.workspaces.insert(
+            workspace_id,
+            Workspace {
+                id: workspace_id,
+                name: "Context Demo".to_string(),
+                path: root.to_string_lossy().to_string(),
+                updated_at: now(),
+            },
+        );
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id,
+                name: "Context Pipeline".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(input_id),
+                revision: 1,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        for (id, name, kind, ports, config) in [
+            (
+                input_id,
+                "Analysis Request",
+                "input.text",
+                input_ports.clone(),
+                serde_json::Map::from_iter([(
+                    "inputValue".to_string(),
+                    serde_json::json!("Analyze the Rust entrypoint"),
+                )]),
+            ),
+            (
+                analyze_id,
+                "Project Analyze",
+                "workspace.analyze",
+                analyze_ports.clone(),
+                serde_json::Map::new(),
+            ),
+            (
+                context_id,
+                "Build Project Context",
+                "workspace.context",
+                context_ports.clone(),
+                serde_json::Map::new(),
+            ),
+            (
+                output_id,
+                "Context Output",
+                "output.text",
+                output_ports.clone(),
+                serde_json::Map::new(),
+            ),
+        ] {
+            store.nodes.insert(
+                id,
+                CanvasNode {
+                    id,
+                    canvas_id,
+                    name: name.to_string(),
+                    kind: kind.to_string(),
+                    ports,
+                    config,
+                },
+            );
+        }
+        let connections = [
+            (
+                input_id,
+                find_port(&input_ports, "Text"),
+                analyze_id,
+                find_port(&analyze_ports, "Request"),
+                PortKind::Data,
+            ),
+            (
+                input_id,
+                find_port(&input_ports, "Complete"),
+                analyze_id,
+                find_port(&analyze_ports, "Start"),
+                PortKind::Flow,
+            ),
+            (
+                input_id,
+                find_port(&input_ports, "Text"),
+                context_id,
+                find_port(&context_ports, "Request"),
+                PortKind::Data,
+            ),
+            (
+                analyze_id,
+                find_port(&analyze_ports, "Report"),
+                context_id,
+                find_port(&context_ports, "Structure"),
+                PortKind::Data,
+            ),
+            (
+                analyze_id,
+                find_port(&analyze_ports, "Complete"),
+                context_id,
+                find_port(&context_ports, "Start"),
+                PortKind::Flow,
+            ),
+            (
+                context_id,
+                find_port(&context_ports, "Context"),
+                output_id,
+                find_port(&output_ports, "Input"),
+                PortKind::Data,
+            ),
+            (
+                context_id,
+                find_port(&context_ports, "Complete"),
+                output_id,
+                find_port(&output_ports, "Start"),
+                PortKind::Flow,
+            ),
+        ];
+        for (source_node_id, source_port_id, target_node_id, target_port_id, kind) in connections {
+            let edge_id = Uuid::new_v4();
+            store.edges.insert(
+                edge_id,
+                CanvasEdge {
+                    id: edge_id,
+                    canvas_id,
+                    source_node_id,
+                    source_port_id,
+                    target_node_id,
+                    target_port_id,
+                    kind,
+                },
+            );
+        }
+
+        let plan = build_run_plan_snapshot(&store, canvas_id).unwrap();
+        assert_eq!(
+            plan.node_order,
+            vec![input_id, analyze_id, context_id, output_id]
+        );
+        match advance_host_execution(&store, canvas_id, &plan, 0, &[], &HashMap::new())
+            .await
+            .unwrap()
+        {
+            HostRunAdvance::Succeeded {
+                result,
+                completed_node_ids,
+                port_values,
+                ..
+            } => {
+                assert_eq!(
+                    completed_node_ids,
+                    vec![input_id, analyze_id, context_id, output_id]
+                );
+                assert!(matches!(
+                    port_values.get(&find_port(&context_ports, "Context")),
+                    Some(RuntimeValue::Json { .. })
+                ));
+                let output: serde_json::Value =
+                    serde_json::from_str(result.as_deref().unwrap()).unwrap();
+                assert_eq!(output["schemaVersion"], "seekwd.project-context/0.1");
+                assert_eq!(
+                    output["structure"]["schemaVersion"],
+                    "seekwd.project-analysis/0.1"
+                );
+                assert!(
+                    output["selectedFiles"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|file| {
+                            file["path"] == "src/main.rs"
+                                && file["content"].as_str().unwrap().contains("context demo")
+                        })
+                );
+            }
+            HostRunAdvance::Waiting { .. } => panic!("configured context graph must complete"),
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn instance_lock_is_exclusive_and_released_on_drop() {
         let directory = std::env::temp_dir().join(format!("pong-host-lock-{}", Uuid::new_v4()));
