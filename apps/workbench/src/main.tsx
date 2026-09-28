@@ -1329,7 +1329,7 @@ function CanvasRow({
             <div className="node-preview-row" key={node.id}>
               <Bot />
               <span title={node.name}>{node.name}</span>
-              {canvas.defaultEntrypointNodeId === node.id ? <span className="node-preview-row__primary" title="Canvas entry node"><CirclePlay /></span> : <Tooltip content="Set as canvas entry node"><IconButton label={`Set ${node.name} as canvas entry node`} size="small" className="node-preview-row__set-primary" onClick={() => onSetEntrypoint(node.id)}><CirclePlay /></IconButton></Tooltip>}
+              {canvas.defaultEntrypointNodeId === node.id ? <span className="node-preview-row__primary" title="Default manual entrypoint"><CirclePlay /><small>Default entry</small></span> : <Tooltip content={`Set ${node.name} as the default manual entrypoint`}><IconButton label={`Set ${node.name} as the default manual entrypoint`} size="small" className="node-preview-row__set-primary" onClick={() => onSetEntrypoint(node.id)}><CirclePlay /></IconButton></Tooltip>}
               <Menu label={`${node.name} actions`} icon={<MoreHorizontal />} iconOnly items={[{ label: "Canvas entry", icon: <CirclePlay />, disabled: true, onSelect: () => undefined }, { label: "Delete node", icon: <Trash2 />, onSelect: () => onDeleteNode(node.id) }]} />
             </div>
           ))}
@@ -1934,7 +1934,12 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
     const source = nodeById.get(dataEdge.sourceNodeId);
     if (source?.kind === "input.text") {
       const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
-      if (!value) return { valid: false, message: `Set a value on ${source.name} before running.` };
+      // An input node used as the selected entrypoint is a runtime input
+      // source. It is valid to start with an empty value; the Host will put
+      // the run into waiting_input and the Run panel will collect the value.
+      if (!value && source.id !== canvas.defaultEntrypointNodeId) {
+        return { valid: false, message: `Set a value on ${source.name} before running, or make it the canvas entrypoint.` };
+      }
     } else if (source?.kind !== "workspace.scan") {
       return { valid: false, message: `${output.name} accepts Text Input or Workspace Scan nodes.` };
     }
