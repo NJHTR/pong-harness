@@ -49,4 +49,12 @@ test("invalid states, event types and commands are rejected", () => {
   assert.equal(validators.StartRunRequest({ ...fixtures.startRunRequest, entrypoint: "webhook" }), false);
   assert.equal(validators.StartRunRequest({ ...fixtures.startRunRequest, revision: -1 }), false);
   assert.equal(validators.StartRunRequest({ ...fixtures.startRunRequest, canvasId: "path-only" }), false);
+
+  const namedEntrypointRequest = {
+    revision: fixtures.startRunRequest.revision,
+    entrypointId: "canvas_citation:default",
+    idempotencyKey: "named-entrypoint",
+  };
+  assert.equal(validators.StartRunRequest(namedEntrypointRequest), true);
+  assert.equal(validators.StartRunRequest({ ...namedEntrypointRequest, entrypointId: "" }), false);
 });

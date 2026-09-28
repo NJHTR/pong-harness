@@ -15,6 +15,21 @@ export type HostWire =
   | CreatePortRequest
   | UpdateNodeRequest;
 export type RunStatus = "idle" | "queued" | "running" | "waiting_input" | "succeeded" | "failed";
+export type StartRunRequest = StartRunRequest1 & {
+  revision: number;
+  entrypoint?: "default";
+  entrypointId?: string;
+  idempotencyKey: string;
+};
+export type StartRunRequest1 =
+  | {
+      entrypoint: "default";
+      [k: string]: unknown;
+    }
+  | {
+      entrypointId: string;
+      [k: string]: unknown;
+    };
 
 export interface HostSnapshot {
   snapshotVersion: number;
@@ -116,11 +131,6 @@ export interface HostError {
   code: string;
   message: string;
   retryable: boolean;
-}
-export interface StartRunRequest {
-  revision: number;
-  entrypoint: "default";
-  idempotencyKey: string;
 }
 export interface SubmitRunInputRequest {
   value: string;

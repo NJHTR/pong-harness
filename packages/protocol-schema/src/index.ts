@@ -79,7 +79,7 @@ export interface CreateEdgeInput { canvasId: Id; sourceNodeId: Id; sourcePortId:
 export interface CreatePortInput { nodeId: Id; name: string; direction: CanvasPort["direction"]; kind: CanvasPort["kind"]; }
 export interface UpdateNodeInput extends UpdateNodeRequest { nodeId: Id; }
 // canvasId is carried by the HTTP path, not by StartRunRequest's JSON body.
-export interface StartRunInput extends StartRunRequest { canvasId: Id; }
+export type StartRunInput = StartRunRequest & { canvasId: Id; };
 export interface SubmitRunInput extends SubmitRunInputRequest { runId: Id; }
 export type SaveRevisionInput = SaveRevisionRequest;
 export interface SetDefaultEntrypointInput { canvasId: Id; nodeId: Id; }

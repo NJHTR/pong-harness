@@ -179,10 +179,21 @@
     "StartRunRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["revision", "entrypoint", "idempotencyKey"],
+      "required": ["revision", "idempotencyKey"],
+      "anyOf": [
+        {
+          "required": ["entrypoint"],
+          "properties": { "entrypoint": { "type": "string", "const": "default" } }
+        },
+        {
+          "required": ["entrypointId"],
+          "properties": { "entrypointId": { "type": "string", "minLength": 1 } }
+        }
+      ],
       "properties": {
         "revision": { "type": "integer", "minimum": 0 },
         "entrypoint": { "type": "string", "const": "default" },
+        "entrypointId": { "type": "string", "minLength": 1 },
         "idempotencyKey": { "type": "string", "minLength": 1 }
       }
     },
