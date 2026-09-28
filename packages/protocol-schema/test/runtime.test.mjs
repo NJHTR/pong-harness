@@ -86,3 +86,24 @@ test("callable and fragment graphs can omit a default entrypoint", () => {
   assert.equal(validateGraph(graph, "fragment").valid, true);
   assert.equal(validateGraph(graph, "callable").warnings[0].code, "NO_DEFAULT_ENTRYPOINT");
 });
+
+test("runtime validation rejects self-loop edges", () => {
+  const output = port({ portId: "out", nodeId: "node", direction: "output", kind: "control", valueType: "any" });
+  const input = port({ portId: "in", nodeId: "node", direction: "input", kind: "control", valueType: "any" });
+  const graph = {
+    schemaVersion: "1.0.0",
+    nodes: [node("node", [input], [output])],
+    edges: [{
+      edgeId: "self-loop",
+      canvasId: "canvas",
+      source: { nodeId: "node", portId: "out" },
+      target: { nodeId: "node", portId: "in" },
+      kind: "control",
+      enabled: true,
+    }],
+    entrypoints: [],
+    triggers: [],
+  };
+
+  assert.equal(validateGraph(graph, "fragment").errors[0].code, "SELF_LOOP");
+});

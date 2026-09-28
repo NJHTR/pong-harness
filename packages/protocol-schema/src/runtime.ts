@@ -356,6 +356,9 @@ export function validateGraph(graph: GraphDocument, canvasKind: CanvasKind): Gra
   }
 
   for (const edge of graph.edges) {
+    if (edge.source.nodeId === edge.target.nodeId) {
+      errors.push({ code: "SELF_LOOP", message: `Edge ${edge.edgeId} cannot connect a node to itself.`, edgeId: edge.edgeId });
+    }
     const source = ports.get(edge.source.portId);
     const target = ports.get(edge.target.portId);
     if (!source || !target) {
