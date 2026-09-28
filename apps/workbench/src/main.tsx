@@ -47,7 +47,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { createHttpHostClient, createLocalHostClient, toRuntimeGraphDocument } from "@seekwd/client";
+import { createHttpHostClient, createLocalHostClient, toRuntimeGraphDocument, type HostClient } from "@seekwd/client";
 import type { Canvas, CanvasEdge, CanvasNode as WireNode, HostSnapshot, Run, Workspace } from "@seekwd/protocol-schema";
 import { validateRuntimeGraph } from "@seekwd/protocol-schema";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -76,10 +76,6 @@ import {
 import "@seekwd/ui/styles.css";
 import "./workbench.css";
 
-const desktopHost = (globalThis as typeof globalThis & { __SEEKWD_HOST__?: { baseUrl: string; token: string } }).__SEEKWD_HOST__;
-const client = import.meta.env.VITE_HOST_PROXY === "0"
-  ? createLocalHostClient()
-  : createHttpHostClient(desktopHost?.baseUrl ?? "", desktopHost?.token);
 const nativeWindow = getCurrentWindow();
 
 type Surface = "canvas" | "automations" | "extensions" | "settings" | "files" | "environments" | "agents";
@@ -129,7 +125,7 @@ const emptySnapshot: HostSnapshot = {
   notifications: [],
 };
 
-function App() {
+function App({ client }: { client: HostClient }) {
   const [snapshot, setSnapshot] = useState<HostSnapshot>(emptySnapshot);
   const [workspaceId, setWorkspaceId] = useState<string>();
   const [canvasId, setCanvasId] = useState<string>();
@@ -2103,4 +2099,20 @@ function noticeIcon(severity: Notice["severity"]) {
   return <Sparkles />;
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+async function resolveHostClient(): Promise<HostClient> {
+  if (import.meta.env.VITE_HOST_PROXY === "0") {
+    return createLocalHostClient();
+  }
+  if ("__TAURI_INTERNALS__" in globalThis) {
+    const connection = await invoke<{ baseUrl: string; token: string }>("get_host_connection");
+    return createHttpHostClient(connection.baseUrl, connection.token);
+  }
+  return createHttpHostClient("");
+}
+
+async function bootstrap() {
+  const client = await resolveHostClient();
+  createRoot(document.getElementById("root")!).render(<StrictMode><App client={client} /></StrictMode>);
+}
+
+void bootstrap();

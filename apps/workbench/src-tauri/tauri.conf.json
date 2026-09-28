@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.seekwd.workbench",
   "build": {
-    "beforeDevCommand": "pnpm --filter @seekwd/workbench dev",
+    "beforeDevCommand": "pnpm --filter @seekwd/workbench dev:desktop-web",
     "devUrl": "http://127.0.0.1:4174",
     "beforeBuildCommand": "pnpm --filter @seekwd/workbench build",
     "beforeBundleCommand": "cargo build -p pong-host --release",

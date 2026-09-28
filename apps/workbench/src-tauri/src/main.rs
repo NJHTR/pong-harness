@@ -7,6 +7,7 @@ use std::{
     sync::Mutex,
 };
 
+use serde::Serialize;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
@@ -15,6 +16,18 @@ const AGENT_KEYRING_SERVICE: &str = "com.seekwd.workbench.agent";
 const AGENT_KEYRING_USER: &str = "default";
 
 struct HostProcess(Mutex<Option<Child>>);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostConnection {
+    base_url: &'static str,
+    token: String,
+}
+
+#[tauri::command]
+fn get_host_connection(connection: tauri::State<'_, HostConnection>) -> HostConnection {
+    connection.inner().clone()
+}
 
 fn validate_project_name(name: &str) -> Result<&str, String> {
     let clean_name = name.trim();
@@ -253,6 +266,14 @@ fn host_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
+fn host_allowed_origin(debug_build: bool) -> &'static str {
+    if debug_build {
+        "http://127.0.0.1:4174"
+    } else {
+        "http://tauri.localhost"
+    }
+}
+
 fn host_binary(app: &tauri::AppHandle) -> io::Result<PathBuf> {
     if let Some(path) = env::var_os("PONG_HOST_BIN") {
         return Ok(PathBuf::from(path));
@@ -300,7 +321,10 @@ fn spawn_host(app: &tauri::AppHandle, token: &str) -> io::Result<Child> {
     let mut command = Command::new(binary);
     command
         .env("PONG_HOST_TOKEN", token)
-        .env("PONG_HOST_ALLOWED_ORIGIN", "http://tauri.localhost")
+        .env(
+            "PONG_HOST_ALLOWED_ORIGIN",
+            host_allowed_origin(cfg!(debug_assertions)),
+        )
         .env("PONG_HOST_DB", database)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -317,6 +341,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            get_host_connection,
             create_project_directory,
             has_agent_api_key,
             save_agent_api_key,
@@ -328,18 +353,16 @@ fn main() {
             let child = spawn_host(&app.handle(), &token)
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
             app.manage(HostProcess(Mutex::new(Some(child))));
-
-            let script = format!(
-                "window.__SEEKWD_HOST__ = {{baseUrl: '{}', token: '{}'}};",
-                HOST_URL, token
-            );
+            app.manage(HostConnection {
+                base_url: HOST_URL,
+                token,
+            });
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Seekwd")
                 .decorations(false)
                 .transparent(false)
                 .inner_size(1440.0, 920.0)
                 .min_inner_size(1024.0, 680.0)
-                .initialization_script(&script)
                 .build()?;
             Ok(())
         })
@@ -411,5 +434,30 @@ mod tests {
         assert!(!sanitized.contains("secret-key"));
         assert!(sanitized.contains("[redacted]"));
         assert!(sanitized.chars().count() <= 321);
+    }
+
+    #[test]
+    fn development_host_accepts_only_the_vite_origin() {
+        assert_eq!(host_allowed_origin(true), "http://127.0.0.1:4174");
+    }
+
+    #[test]
+    fn packaged_host_accepts_only_the_tauri_origin() {
+        assert_eq!(host_allowed_origin(false), "http://tauri.localhost");
+    }
+
+    #[test]
+    fn host_connection_serializes_for_the_frontend_contract() {
+        let connection = HostConnection {
+            base_url: HOST_URL,
+            token: "test-token".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(connection).unwrap(),
+            serde_json::json!({
+                "baseUrl": "http://127.0.0.1:4317",
+                "token": "test-token"
+            })
+        );
     }
 }
