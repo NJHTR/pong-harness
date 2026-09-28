@@ -129,10 +129,22 @@ export interface Run {
   currentNodeId?: string | null;
   inputPrompt?: string | null;
   result?: string | null;
+  planSnapshot?: RunPlanSnapshot;
+  executionCursor?: number;
   completedNodeIds?: string[];
   portValues?: {
     [k: string]: RuntimeValue;
   };
+}
+export interface RunPlanSnapshot {
+  schemaVersion: 1;
+  entrypointNodeId: string;
+  /**
+   * @minItems 1
+   */
+  nodeOrder: [string, ...string[]];
+  graphDigest: string;
+  graphJson: string;
 }
 export interface Notification {
   id: string;

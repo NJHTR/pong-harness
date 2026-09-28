@@ -156,6 +156,23 @@
         }
       ]
     },
+    "RunPlanSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "entrypointNodeId", "nodeOrder", "graphDigest", "graphJson"],
+      "properties": {
+        "schemaVersion": { "type": "integer", "const": 1 },
+        "entrypointNodeId": { "type": "string" },
+        "nodeOrder": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "graphDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "graphJson": { "type": "string", "minLength": 2 }
+      }
+    },
     "Run": {
       "type": "object",
       "additionalProperties": false,
@@ -170,6 +187,8 @@
         "currentNodeId": { "type": ["string", "null"] },
         "inputPrompt": { "type": ["string", "null"] },
         "result": { "type": ["string", "null"] },
+        "planSnapshot": { "$ref": "#/definitions/RunPlanSnapshot" },
+        "executionCursor": { "type": "integer", "minimum": 0 },
         "completedNodeIds": { "type": "array", "items": { "type": "string" } },
         "portValues": {
           "type": "object",

@@ -75,3 +75,19 @@ test("runtime values are typed per port and legacy node maps are rejected", () =
   };
   assert.equal(validators.HostSnapshot(artifactReference), true);
 });
+
+test("Run plan snapshots reject invalid cursors and mutable shapes", () => {
+  const negativeCursor = structuredClone(fixtures.snapshot);
+  negativeCursor.runs[0].executionCursor = -1;
+  assert.equal(validators.HostSnapshot(negativeCursor), false);
+
+  const duplicatePlanNode = structuredClone(fixtures.snapshot);
+  duplicatePlanNode.runs[0].planSnapshot.nodeOrder.push(
+    duplicatePlanNode.runs[0].planSnapshot.nodeOrder[0],
+  );
+  assert.equal(validators.HostSnapshot(duplicatePlanNode), false);
+
+  const invalidDigest = structuredClone(fixtures.snapshot);
+  invalidDigest.runs[0].planSnapshot.graphDigest = "sha256:not-a-digest";
+  assert.equal(validators.HostSnapshot(invalidDigest), false);
+});

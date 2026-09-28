@@ -134,6 +134,16 @@ impl RuntimeValue {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPlanSnapshot {
+    pub schema_version: u32,
+    pub entrypoint_node_id: Id,
+    pub node_order: Vec<Id>,
+    pub graph_digest: String,
+    pub graph_json: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -149,6 +159,10 @@ pub struct Run {
     pub input_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_snapshot: Option<RunPlanSnapshot>,
+    #[serde(default)]
+    pub execution_cursor: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub completed_node_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]

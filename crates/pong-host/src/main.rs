@@ -11,7 +11,7 @@ use axum::{
 use fs2::FileExt;
 use pong_core::{
     Canvas, CanvasEdge, CanvasNode, CanvasPort, CanvasRevision, Notification, PortDirection,
-    PortKind, Run, RunStatus, RuntimeValue, Workspace,
+    PortKind, Run, RunPlanSnapshot, RunStatus, RuntimeValue, Workspace,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -925,6 +925,70 @@ fn graph_json_for_canvas(store: &Store, canvas_id: Uuid) -> String {
     .to_string()
 }
 
+#[derive(Deserialize)]
+struct FrozenGraph {
+    nodes: Vec<CanvasNode>,
+    edges: Vec<CanvasEdge>,
+}
+
+fn build_run_plan_snapshot(store: &Store, canvas_id: Uuid) -> Result<RunPlanSnapshot, String> {
+    let plan = compile_host_execution_plan(store, canvas_id).map_err(str::to_string)?;
+    let graph_json = graph_json_for_canvas(store, canvas_id);
+    Ok(RunPlanSnapshot {
+        schema_version: 1,
+        entrypoint_node_id: plan.entrypoint_node_id,
+        node_order: plan.node_order,
+        graph_digest: sha256_digest(&graph_json),
+        graph_json,
+    })
+}
+
+fn frozen_execution_store(
+    live_store: &Store,
+    canvas_id: Uuid,
+    snapshot: &RunPlanSnapshot,
+) -> Result<Store, String> {
+    if snapshot.schema_version != 1 {
+        return Err(format!(
+            "Unsupported Run plan snapshot schema version {}",
+            snapshot.schema_version
+        ));
+    }
+    if sha256_digest(&snapshot.graph_json) != snapshot.graph_digest {
+        return Err("Run plan snapshot graph digest does not match its graph JSON".to_string());
+    }
+    let graph: FrozenGraph = serde_json::from_str(&snapshot.graph_json)
+        .map_err(|error| format!("Run plan snapshot graph is invalid: {error}"))?;
+    let canvas = live_store
+        .canvases
+        .get(&canvas_id)
+        .ok_or_else(|| "Canvas was not found".to_string())?;
+    let mut frozen = Store::default();
+    let mut frozen_canvas = canvas.clone();
+    frozen_canvas.default_entrypoint_node_id = Some(snapshot.entrypoint_node_id);
+    frozen.canvases.insert(canvas_id, frozen_canvas);
+    if let Some(workspace) = live_store.workspaces.get(&canvas.workspace_id) {
+        frozen.workspaces.insert(workspace.id, workspace.clone());
+    }
+    for node in graph.nodes {
+        if node.canvas_id != canvas_id || frozen.nodes.insert(node.id, node).is_some() {
+            return Err("Run plan snapshot contains an invalid or duplicate node".to_string());
+        }
+    }
+    for edge in graph.edges {
+        if edge.canvas_id != canvas_id || frozen.edges.insert(edge.id, edge).is_some() {
+            return Err("Run plan snapshot contains an invalid or duplicate edge".to_string());
+        }
+    }
+    let compiled = compile_host_execution_plan(&frozen, canvas_id).map_err(str::to_string)?;
+    if compiled.entrypoint_node_id != snapshot.entrypoint_node_id
+        || compiled.node_order != snapshot.node_order
+    {
+        return Err("Run plan snapshot does not match its frozen graph".to_string());
+    }
+    Ok(frozen)
+}
+
 fn mark_canvas_dirty(store: &mut Store, canvas_id: Uuid) -> Result<(), HostError> {
     let canvas = store
         .canvases
@@ -1814,23 +1878,30 @@ enum HostRunAdvance {
     Waiting {
         node_id: Uuid,
         prompt: String,
+        execution_cursor: usize,
         completed_node_ids: Vec<Uuid>,
         port_values: HashMap<Uuid, RuntimeValue>,
     },
     Succeeded {
         result: Option<String>,
+        execution_cursor: usize,
         completed_node_ids: Vec<Uuid>,
         port_values: HashMap<Uuid, RuntimeValue>,
     },
 }
 
 fn advance_host_execution(
-    store: &Store,
+    live_store: &Store,
     canvas_id: Uuid,
+    plan_snapshot: &RunPlanSnapshot,
+    initial_execution_cursor: usize,
     completed_node_ids: &[Uuid],
     initial_port_values: &HashMap<Uuid, RuntimeValue>,
 ) -> Result<HostRunAdvance, String> {
-    let plan = compile_host_execution_plan(store, canvas_id).map_err(str::to_string)?;
+    let store = frozen_execution_store(live_store, canvas_id, plan_snapshot)?;
+    if initial_execution_cursor > plan_snapshot.node_order.len() {
+        return Err("Run execution cursor is beyond the frozen execution plan".to_string());
+    }
     let mut completed = completed_node_ids
         .iter()
         .copied()
@@ -1838,9 +1909,17 @@ fn advance_host_execution(
     let mut ordered_completed = completed_node_ids.to_vec();
     let mut port_values = initial_port_values.clone();
     let mut final_result = None;
+    let mut execution_cursor = initial_execution_cursor;
 
-    for node_id in plan.node_order {
+    for (index, node_id) in plan_snapshot
+        .node_order
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(initial_execution_cursor)
+    {
         if completed.contains(&node_id) {
+            execution_cursor = index + 1;
             continue;
         }
         let node = store
@@ -1865,6 +1944,7 @@ fn advance_host_execution(
                     return Ok(HostRunAdvance::Waiting {
                         node_id: node.id,
                         prompt: format!("Enter a value for {}", node.name),
+                        execution_cursor: index,
                         completed_node_ids: ordered_completed,
                         port_values,
                     });
@@ -1881,12 +1961,13 @@ fn advance_host_execution(
                 return Ok(HostRunAdvance::Waiting {
                     node_id: node.id,
                     prompt,
+                    execution_cursor: index,
                     completed_node_ids: ordered_completed,
                     port_values,
                 });
             }
             "workspace.scan" => {
-                let value = resolve_workspace_scan(store, canvas_id)?
+                let value = resolve_workspace_scan(&store, canvas_id)?
                     .ok_or_else(|| "Workspace scan did not produce output".to_string())?;
                 let json = serde_json::from_str(&value)
                     .map_err(|error| format!("Workspace scan produced invalid JSON: {error}"))?;
@@ -1897,7 +1978,7 @@ fn advance_host_execution(
                 final_result = Some(value);
             }
             "workspace.analyze" => {
-                let value = resolve_project_analysis(store, canvas_id, &port_values)?
+                let value = resolve_project_analysis(&store, canvas_id, &port_values)?
                     .ok_or_else(|| "Project analysis did not produce a report".to_string())?;
                 let json = serde_json::from_str(&value)
                     .map_err(|error| format!("Project analysis produced invalid JSON: {error}"))?;
@@ -1908,7 +1989,7 @@ fn advance_host_execution(
                 final_result = Some(value);
             }
             "output.text" => {
-                let value = resolve_output_node(store, canvas_id, node, &port_values)?;
+                let value = resolve_output_node(&store, canvas_id, node, &port_values)?;
                 final_result = Some(value);
             }
             kind => {
@@ -1919,13 +2000,15 @@ fn advance_host_execution(
         }
         completed.insert(node.id);
         ordered_completed.push(node.id);
+        execution_cursor = index + 1;
     }
 
     if final_result.is_none() {
-        final_result = resolve_run_output(store, canvas_id, &port_values)?;
+        final_result = resolve_run_output(&store, canvas_id, &port_values)?;
     }
     Ok(HostRunAdvance::Succeeded {
         result: final_result,
+        execution_cursor,
         completed_node_ids: ordered_completed,
         port_values,
     })
@@ -2576,7 +2659,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
         tokio::task::yield_now().await;
         let mut store = state.inner.lock().unwrap();
         let previous = store.clone();
-        let (canvas_id, advance) = {
+        let (canvas_id, plan_snapshot, execution_cursor, completed_node_ids, port_values) = {
             let Some(run) = store.runs.get(&run_id) else {
                 return;
             };
@@ -2585,14 +2668,34 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
             }
             (
                 run.canvas_id,
-                advance_host_execution(
-                    &store,
-                    run.canvas_id,
-                    &run.completed_node_ids,
-                    &run.port_values,
-                ),
+                run.plan_snapshot.clone(),
+                run.execution_cursor,
+                run.completed_node_ids.clone(),
+                run.port_values.clone(),
             )
         };
+        let plan_snapshot = match plan_snapshot {
+            Some(snapshot) => Ok(snapshot),
+            None => build_run_plan_snapshot(&store, canvas_id),
+        };
+        if let Ok(snapshot) = &plan_snapshot
+            && store
+                .runs
+                .get(&run_id)
+                .is_some_and(|run| run.plan_snapshot.is_none())
+        {
+            store.runs.get_mut(&run_id).unwrap().plan_snapshot = Some(snapshot.clone());
+        }
+        let advance = plan_snapshot.and_then(|snapshot| {
+            advance_host_execution(
+                &store,
+                canvas_id,
+                &snapshot,
+                execution_cursor,
+                &completed_node_ids,
+                &port_values,
+            )
+        });
         let canvas_name = store
             .canvases
             .get(&canvas_id)
@@ -2602,6 +2705,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
             Ok(HostRunAdvance::Waiting {
                 node_id,
                 prompt,
+                execution_cursor,
                 completed_node_ids,
                 port_values,
             }) => {
@@ -2611,6 +2715,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 run.status = RunStatus::WaitingInput;
                 run.current_node_id = Some(node_id);
                 run.input_prompt = Some(prompt.clone());
+                run.execution_cursor = execution_cursor;
                 run.completed_node_ids = completed_node_ids;
                 run.port_values = port_values;
                 run.node_values.clear();
@@ -2623,6 +2728,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
             }
             Ok(HostRunAdvance::Succeeded {
                 result,
+                execution_cursor,
                 completed_node_ids,
                 port_values,
             }) => {
@@ -2633,6 +2739,7 @@ fn schedule_run_execution(state: AppState, run_id: Uuid) {
                 run.current_node_id = None;
                 run.input_prompt = None;
                 run.result = result.clone();
+                run.execution_cursor = execution_cursor;
                 run.completed_node_ids = completed_node_ids;
                 run.port_values = port_values;
                 run.node_values.clear();
@@ -2844,6 +2951,14 @@ async fn start_run(
             true,
         ));
     }
+    let plan_snapshot = build_run_plan_snapshot(&store, canvas_id).map_err(|_| {
+        HostError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "GRAPH_INVALID",
+            "The canvas graph could not be frozen into an execution plan",
+            false,
+        )
+    })?;
     let canvas = store
         .canvases
         .get_mut(&canvas_id)
@@ -2859,6 +2974,8 @@ async fn start_run(
         current_node_id: None,
         input_prompt: None,
         result: None,
+        plan_snapshot: Some(plan_snapshot),
+        execution_cursor: 0,
         completed_node_ids: Vec::new(),
         port_values: HashMap::new(),
         node_values: HashMap::new(),
@@ -3128,6 +3245,110 @@ mod tests {
     }
 
     #[test]
+    fn execution_uses_the_frozen_graph_after_the_live_draft_changes() {
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let output_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let output_ports = default_ports(output_id, "output.text");
+        let input_text_port = input_ports
+            .iter()
+            .find(|port| port.name == "Text")
+            .unwrap()
+            .id;
+        let output_input_port = output_ports
+            .iter()
+            .find(|port| port.name == "Input")
+            .unwrap()
+            .id;
+        let mut original_config = serde_json::Map::new();
+        original_config.insert("inputValue".to_string(), serde_json::json!("Frozen value"));
+        let mut store = Store::default();
+        store.workspaces.insert(
+            workspace_id,
+            Workspace {
+                id: workspace_id,
+                name: "Frozen".to_string(),
+                path: "D:/Frozen".to_string(),
+                updated_at: now(),
+            },
+        );
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id,
+                name: "Frozen graph".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(input_id),
+                revision: 1,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        store.nodes.insert(
+            input_id,
+            CanvasNode {
+                id: input_id,
+                canvas_id,
+                name: "Input".to_string(),
+                kind: "input.text".to_string(),
+                ports: input_ports,
+                config: original_config,
+            },
+        );
+        store.nodes.insert(
+            output_id,
+            CanvasNode {
+                id: output_id,
+                canvas_id,
+                name: "Output".to_string(),
+                kind: "output.text".to_string(),
+                ports: output_ports,
+                config: serde_json::Map::new(),
+            },
+        );
+        let edge_id = Uuid::new_v4();
+        store.edges.insert(
+            edge_id,
+            CanvasEdge {
+                id: edge_id,
+                canvas_id,
+                source_node_id: input_id,
+                source_port_id: input_text_port,
+                target_node_id: output_id,
+                target_port_id: output_input_port,
+                kind: PortKind::Data,
+            },
+        );
+        let plan_snapshot = build_run_plan_snapshot(&store, canvas_id).unwrap();
+
+        store
+            .nodes
+            .get_mut(&input_id)
+            .unwrap()
+            .config
+            .insert("inputValue".to_string(), serde_json::json!("Changed value"));
+        store.edges.remove(&edge_id);
+
+        match advance_host_execution(&store, canvas_id, &plan_snapshot, 0, &[], &HashMap::new())
+            .unwrap()
+        {
+            HostRunAdvance::Succeeded {
+                result,
+                execution_cursor,
+                ..
+            } => {
+                assert_eq!(result.as_deref(), Some("Frozen value"));
+                assert_eq!(execution_cursor, 2);
+            }
+            HostRunAdvance::Waiting { .. } => panic!("the frozen input is configured"),
+        }
+    }
+
+    #[test]
     fn workspace_scan_reads_only_a_bounded_file_inventory() {
         let root = std::env::temp_dir().join(format!("pong-host-scan-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -3326,7 +3547,10 @@ mod tests {
         let plan = compile_host_execution_plan(&store, canvas_id).unwrap();
         assert_eq!(plan.entrypoint_node_id, input_id);
         assert_eq!(plan.node_order, vec![input_id, analyze_id]);
-        match advance_host_execution(&store, canvas_id, &[], &HashMap::new()).unwrap() {
+        let plan_snapshot = build_run_plan_snapshot(&store, canvas_id).unwrap();
+        match advance_host_execution(&store, canvas_id, &plan_snapshot, 0, &[], &HashMap::new())
+            .unwrap()
+        {
             HostRunAdvance::Waiting {
                 node_id, prompt, ..
             } => {
@@ -3335,13 +3559,17 @@ mod tests {
             }
             HostRunAdvance::Succeeded { .. } => panic!("empty input must pause the run"),
         }
-        match advance_host_execution(&store, canvas_id, &[input_id], &values).unwrap() {
+        match advance_host_execution(&store, canvas_id, &plan_snapshot, 0, &[input_id], &values)
+            .unwrap()
+        {
             HostRunAdvance::Succeeded {
                 result,
                 completed_node_ids,
                 port_values,
+                execution_cursor,
             } => {
                 assert_eq!(completed_node_ids, vec![input_id, analyze_id]);
+                assert_eq!(execution_cursor, 2);
                 assert!(matches!(
                     port_values.get(&analyze_report_port),
                     Some(RuntimeValue::Json { .. })
@@ -4064,6 +4292,13 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        let started_plan = started.plan_snapshot.as_ref().expect("Run plan snapshot");
+        assert_eq!(started_plan.entrypoint_node_id, input_id);
+        assert_eq!(
+            started_plan.node_order,
+            vec![input_id, analyze_id, output_id]
+        );
+        assert_eq!(started.execution_cursor, 0);
         for _ in 0..100 {
             if state
                 .inner
@@ -4077,15 +4312,16 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
-        assert!(
-            state
-                .inner
-                .lock()
-                .unwrap()
-                .runs
-                .get(&started.id)
-                .is_some_and(|run| matches!(run.status, RunStatus::WaitingInput))
-        );
+        {
+            let store = state.inner.lock().unwrap();
+            let waiting = store.runs.get(&started.id).unwrap();
+            assert!(matches!(waiting.status, RunStatus::WaitingInput));
+            assert_eq!(waiting.execution_cursor, 0);
+            assert_eq!(
+                waiting.plan_snapshot.as_ref().unwrap().graph_digest,
+                started_plan.graph_digest
+            );
+        }
 
         let submit_response = app
             .oneshot(
@@ -4114,14 +4350,15 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
-        let result = state
-            .inner
-            .lock()
-            .unwrap()
-            .runs
-            .get(&started.id)
-            .and_then(|run| run.result.clone())
-            .expect("analysis result");
+        let store = state.inner.lock().unwrap();
+        let completed = store.runs.get(&started.id).unwrap();
+        assert_eq!(completed.execution_cursor, 3);
+        assert!(matches!(
+            completed.port_values.get(&analyze_report_port),
+            Some(RuntimeValue::Json { .. })
+        ));
+        let result = completed.result.clone().expect("analysis result");
+        drop(store);
         let result: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(result["request"], "Analyze this backend carefully");
         assert!(
@@ -4727,6 +4964,8 @@ mod tests {
                 current_node_id: None,
                 input_prompt: None,
                 result: None,
+                plan_snapshot: None,
+                execution_cursor: 0,
                 completed_node_ids: Vec::new(),
                 port_values: HashMap::new(),
                 node_values: HashMap::new(),
@@ -4931,6 +5170,8 @@ mod tests {
                 current_node_id: None,
                 input_prompt: None,
                 result: None,
+                plan_snapshot: None,
+                execution_cursor: 0,
                 completed_node_ids: Vec::new(),
                 port_values: HashMap::new(),
                 node_values: HashMap::new(),
@@ -4972,6 +5213,8 @@ mod tests {
                 current_node_id: None,
                 input_prompt: None,
                 result: None,
+                plan_snapshot: None,
+                execution_cursor: 0,
                 completed_node_ids: Vec::new(),
                 port_values: HashMap::new(),
                 node_values: HashMap::new(),

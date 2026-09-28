@@ -152,6 +152,10 @@ const runtimeValueText = (value: RuntimeValue | undefined) => {
   if (value.type === "artifact_ref") return value.artifactId;
   return value.resourceId;
 };
+const sha256Digest = async (content: string) => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+  return `sha256:${Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("")}`;
+};
 const seed = (): HostSnapshot => {
   const workspace: Workspace = { id: "ws_thesis", name: "Thesis Workspace", path: "D:/Documents/Thesis", updatedAt: now() };
   const canvas: Canvas = { id: "canvas_citation", workspaceId: workspace.id, name: "Citation Review", status: "idle", defaultEntrypointNodeId: null, revision: 3, draftRevision: 0, draftDirty: false, updatedAt: now() };
@@ -179,28 +183,61 @@ export function createLocalHostClient(): HostClient {
   const commit = () => { state.snapshotVersion += 1; localGlobalPosition += 1; localStorage.setItem(key, JSON.stringify(state)); listeners.forEach((listener) => listener(structuredClone(state))); };
   const workspace = (id: Id) => state.workspaces.find((item) => item.id === id);
   const canvas = (id: Id) => state.canvases.find((item) => item.id === id);
+  const runGraph = (run: Run) => {
+    if (run.planSnapshot?.graphJson) {
+      try {
+        return JSON.parse(run.planSnapshot.graphJson) as { nodes: CanvasNode[]; edges: CanvasEdge[] };
+      } catch {
+        // Legacy local Runs fall through to the current graph.
+      }
+    }
+    return {
+      nodes: state.nodes.filter((node) => node.canvasId === run.canvasId),
+      edges: state.edges.filter((edge) => edge.canvasId === run.canvasId),
+    };
+  };
+  const buildLocalRunPlan = async (canvasId: Id, entrypointNodeId: Id) => {
+    const nodes = [...state.nodes.filter((node) => node.canvasId === canvasId)]
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const edges = [...state.edges.filter((edge) => edge.canvasId === canvasId)]
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const adjacency = new Map<string, string[]>();
+    for (const edge of edges) {
+      adjacency.set(edge.sourceNodeId, [...(adjacency.get(edge.sourceNodeId) ?? []), edge.targetNodeId]);
+    }
+    const nodeOrder: string[] = [];
+    const visited = new Set<string>();
+    const queue = [entrypointNodeId];
+    while (queue.length) {
+      const nodeId = queue.shift()!;
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      nodeOrder.push(nodeId);
+      queue.push(...(adjacency.get(nodeId) ?? []));
+    }
+    if (!nodeOrder.length) throw new Error("The local execution plan has no entrypoint node");
+    const graphJson = JSON.stringify({ nodes, edges });
+    return {
+      schemaVersion: 1 as const,
+      entrypointNodeId,
+      nodeOrder: nodeOrder as [string, ...string[]],
+      graphDigest: await sha256Digest(graphJson),
+      graphJson,
+    };
+  };
   const needsInteractiveInput = (node: CanvasNode) => {
     if (node.kind === "task.manual") return true;
     if (node.kind !== "input.text") return false;
     const value = typeof node.config?.inputValue === "string" ? node.config.inputValue : "";
     return !value.trim();
   };
-  const firstInteractiveNode = (canvasId: Id, completedNodeIds: string[]) => {
-    const currentCanvas = canvas(canvasId);
-    if (!currentCanvas?.defaultEntrypointNodeId) return undefined;
-    const nodes = state.nodes.filter((node) => node.canvasId === canvasId);
+  const firstInteractiveNode = (run: Run, completedNodeIds: string[]) => {
+    const graph = runGraph(run);
+    const nodes = graph.nodes;
     const byId = new Map(nodes.map((node) => [node.id, node]));
-    const adjacency = new Map<string, string[]>();
-    state.edges.filter((edge) => edge.canvasId === canvasId).forEach((edge) => {
-      adjacency.set(edge.sourceNodeId, [...(adjacency.get(edge.sourceNodeId) ?? []), edge.targetNodeId]);
-    });
-    const queue = [currentCanvas.defaultEntrypointNodeId];
-    const visited = new Set<string>();
     const completed = new Set(completedNodeIds);
-    while (queue.length) {
-      const nodeId = queue.shift()!;
-      if (visited.has(nodeId)) continue;
-      visited.add(nodeId);
+    const nodeOrder = run.planSnapshot?.nodeOrder ?? nodes.map((node) => node.id);
+    for (const [index, nodeId] of nodeOrder.entries()) {
       const node = byId.get(nodeId);
       if (node && !completed.has(nodeId) && needsInteractiveInput(node)) {
         const configured = typeof node.config?.instruction === "string" && node.config.instruction.trim()
@@ -208,18 +245,18 @@ export function createLocalHostClient(): HostClient {
           : typeof node.config?.inputValue === "string" && node.config.inputValue.trim()
             ? node.config.inputValue
             : node.kind === "task.manual" ? `Complete the manual task: ${node.name}` : `Enter a value for ${node.name}`;
-        return { node, prompt: configured };
+        return { node, prompt: configured, index };
       }
-      queue.push(...(adjacency.get(nodeId) ?? []));
     }
     return undefined;
   };
-  const resolveTextOutput = (canvasId: Id, portValues: Record<string, RuntimeValue> = {}) => {
-    const outputs = state.nodes.filter((node) => node.canvasId === canvasId && node.kind === "output.text");
+  const resolveTextOutput = (run: Run, portValues: Record<string, RuntimeValue> = {}) => {
+    const graph = runGraph(run);
+    const outputs = graph.nodes.filter((node) => node.kind === "output.text");
     if (!outputs.length) return undefined;
     return outputs.map((output) => {
       const input = output.ports.find((candidate) => candidate.name === "Input" && candidate.direction === "input");
-      const edge = state.edges.find((candidate) => candidate.canvasId === canvasId && candidate.targetPortId === input?.id);
+      const edge = graph.edges.find((candidate) => candidate.targetPortId === input?.id);
       const value = edge ? runtimeValueText(portValues[edge.sourcePortId]).trim() : "";
       if (!input || !edge || !value) throw new Error("Text Output requires a connected source port value");
       return value;
@@ -229,22 +266,24 @@ export function createLocalHostClient(): HostClient {
     const current = state.runs.find((candidate) => candidate.id === runId);
     const currentCanvas = canvas(canvasId);
     if (!current || !currentCanvas || current.status !== "running") return;
-    const next = firstInteractiveNode(canvasId, current.completedNodeIds ?? []);
+    const next = firstInteractiveNode(current, current.completedNodeIds ?? []);
     if (next) {
       current.status = "waiting_input";
       current.currentNodeId = next.node.id;
       current.inputPrompt = next.prompt;
+      current.executionCursor = next.index;
       currentCanvas.status = "waiting_input";
     } else {
       try {
-        for (const node of state.nodes.filter((candidate) => candidate.canvasId === canvasId && candidate.kind === "input.text")) {
+        for (const node of runGraph(current).nodes.filter((candidate) => candidate.kind === "input.text")) {
           const configured = typeof node.config?.inputValue === "string" ? node.config.inputValue.trim() : "";
           const output = valueOutputPort(node);
           if (configured && output && !current.portValues?.[output.id]) {
             current.portValues = { ...(current.portValues ?? {}), [output.id]: { type: "text", value: configured } };
           }
         }
-        current.result = resolveTextOutput(canvasId, current.portValues ?? {}) ?? null;
+        current.result = resolveTextOutput(current, current.portValues ?? {}) ?? null;
+        current.executionCursor = current.planSnapshot?.nodeOrder.length ?? current.completedNodeIds?.length ?? 0;
         current.status = "succeeded";
         current.finishedAt = now();
         currentCanvas.status = "succeeded";
@@ -329,6 +368,8 @@ export function createLocalHostClient(): HostClient {
         currentNodeId: null,
         inputPrompt: null,
         result: null,
+        planSnapshot: await buildLocalRunPlan(item.id, item.defaultEntrypointNodeId),
+        executionCursor: 0,
         completedNodeIds: [],
         portValues: {},
       };
@@ -347,7 +388,7 @@ export function createLocalHostClient(): HostClient {
       const value = input.value.trim();
       if (!value) throw new Error("A result value is required");
       if (run.currentNodeId) {
-        const output = valueOutputPort(state.nodes.find((node) => node.id === run.currentNodeId));
+        const output = valueOutputPort(runGraph(run).nodes.find((node) => node.id === run.currentNodeId));
         if (!output) throw new Error("The waiting node has no data or resource output port");
         run.portValues = { ...(run.portValues ?? {}), [output.id]: { type: "text", value } };
         if (!(run.completedNodeIds ?? []).includes(run.currentNodeId)) {

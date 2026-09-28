@@ -10,6 +10,7 @@ export type {
   HostSnapshot,
   Notification,
   Run,
+  RunPlanSnapshot,
   RunStatus,
   RuntimeValue,
   Workspace,

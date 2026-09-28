@@ -67,6 +67,16 @@
         "status": "running",
         "startedAt": "2026-09-24T08:00:00.000Z",
         "finishedAt": null,
+        "planSnapshot": {
+          "schemaVersion": 1,
+          "entrypointNodeId": "33333333-3333-4333-8333-333333333333",
+          "nodeOrder": [
+            "33333333-3333-4333-8333-333333333333"
+          ],
+          "graphDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "graphJson": "{}"
+        },
+        "executionCursor": 0,
         "portValues": {
           "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb": {
             "type": "text",
@@ -80,7 +90,8 @@
         "revision": 1,
         "status": "succeeded",
         "startedAt": "2026-09-23T08:00:00.000Z",
-        "finishedAt": "2026-09-23T08:00:01.000Z"
+        "finishedAt": "2026-09-23T08:00:01.000Z",
+        "executionCursor": 0
       }
     ],
     "notifications": [
