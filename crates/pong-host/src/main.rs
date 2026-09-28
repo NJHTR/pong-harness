@@ -235,8 +235,48 @@ struct EntrypointInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StartRunInput {
     revision: u64,
-    entrypoint: String,
+    #[serde(default)]
+    entrypoint: Option<String>,
+    #[serde(default)]
+    entrypoint_id: Option<String>,
     idempotency_key: String,
+}
+
+fn normalize_start_entrypoint(canvas_id: Uuid, input: &StartRunInput) -> Result<String, HostError> {
+    let legacy_default = input.entrypoint.as_deref();
+    if let Some(entrypoint) = legacy_default {
+        if entrypoint != "default" {
+            return Err(HostError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "INVALID_INPUT",
+                "Only the default manual entrypoint is supported by this Host",
+                false,
+            ));
+        }
+    }
+
+    if let Some(entrypoint_id) = input.entrypoint_id.as_deref() {
+        let expected = format!("{canvas_id}:default");
+        if entrypoint_id != expected {
+            return Err(HostError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "INVALID_INPUT",
+                "Only the default manual entrypoint is supported by this Host",
+                false,
+            ));
+        }
+    }
+
+    if legacy_default.is_none() && input.entrypoint_id.is_none() {
+        return Err(HostError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "INVALID_INPUT",
+            "entrypointId or legacy entrypoint is required",
+            false,
+        ));
+    }
+
+    Ok("default".to_string())
 }
 
 #[derive(Deserialize)]
@@ -1867,6 +1907,7 @@ async fn start_run(
             false,
         ));
     }
+    let normalized_entrypoint = normalize_start_entrypoint(canvas_id, &input)?;
 
     let key = (canvas_id, input.idempotency_key.trim().to_string());
     if let Some(run_id) = store.run_idempotency.get(&key).copied() {
@@ -1878,7 +1919,7 @@ async fn start_run(
                 true,
             )
         })?;
-        if run.revision != input.revision || input.entrypoint != "default" {
+        if run.revision != input.revision || normalized_entrypoint != "default" {
             return Err(HostError::new(
                 StatusCode::CONFLICT,
                 "DUPLICATE_COMMAND",
@@ -1894,14 +1935,6 @@ async fn start_run(
         .canvases
         .get(&canvas_id)
         .ok_or_else(|| not_found_error("Canvas was not found"))?;
-    if input.entrypoint != "default" {
-        return Err(HostError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "INVALID_INPUT",
-            "Only the default entrypoint is supported",
-            false,
-        ));
-    }
     if canvas.default_entrypoint_node_id.is_none() {
         return Err(HostError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -2245,7 +2278,8 @@ mod tests {
         let request: StartRunInput =
             serde_json::from_value(fixtures["startRunRequest"].clone()).unwrap();
         assert_eq!(request.revision, 2);
-        assert_eq!(request.entrypoint, "default");
+        assert_eq!(request.entrypoint.as_deref(), Some("default"));
+        assert_eq!(request.entrypoint_id, None);
         assert_eq!(request.idempotency_key, "run-key-1");
         let mut extra = fixtures["startRunRequest"].clone();
         extra["canvasId"] = serde_json::json!("path-only");

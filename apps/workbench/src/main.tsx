@@ -693,6 +693,7 @@ function App() {
         canvasId: activeCanvas.id,
         revision,
         entrypoint: "default",
+        entrypointId: `${activeCanvas.id}:default`,
         idempotencyKey: crypto.randomUUID(),
       });
       setRunPanelOpen(true);
