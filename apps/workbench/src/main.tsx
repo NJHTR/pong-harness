@@ -1991,6 +1991,22 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
     reachable.add(id);
     queue.push(...(adjacency.get(id) ?? []));
   }
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const hasCycle = (nodeId: string): boolean => {
+    if (visiting.has(nodeId)) return true;
+    if (visited.has(nodeId)) return false;
+    visiting.add(nodeId);
+    for (const next of adjacency.get(nodeId) ?? []) {
+      if (hasCycle(next)) return true;
+    }
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    return false;
+  };
+  if (nodes.some((node) => hasCycle(node.id))) {
+    return { valid: false, message: "The canvas contains a cycle. Use an explicit Loop or For Each node instead of a raw graph cycle." };
+  }
   const unreachable = nodes.find((node) => !reachable.has(node.id) && !isPassiveSourceNode(node));
   if (unreachable) {
     return {

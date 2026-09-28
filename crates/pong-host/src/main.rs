@@ -1155,24 +1155,74 @@ fn compile_host_execution_plan(
         })
         .collect::<Vec<_>>();
     flow_edges.sort_by_key(|edge| edge.id);
-    let mut adjacency = HashMap::<Uuid, Vec<Uuid>>::new();
-    for edge in flow_edges {
-        adjacency
+    let mut activation_adjacency = HashMap::<Uuid, Vec<Uuid>>::new();
+    for edge in &flow_edges {
+        activation_adjacency
             .entry(edge.source_node_id)
             .or_default()
             .push(edge.target_node_id);
     }
-    let mut node_order = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut selected = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::from([entrypoint_node_id]);
     while let Some(node_id) = queue.pop_front() {
-        if !visited.insert(node_id) {
+        if !selected.insert(node_id) {
             continue;
         }
-        node_order.push(node_id);
-        if let Some(next) = adjacency.get(&node_id) {
+        if let Some(next) = activation_adjacency.get(&node_id) {
             queue.extend(next.iter().copied());
         }
+    }
+
+    loop {
+        let upstream = flow_edges
+            .iter()
+            .filter(|edge| {
+                matches!(edge.kind, PortKind::Data | PortKind::Resource)
+                    && selected.contains(&edge.target_node_id)
+                    && !selected.contains(&edge.source_node_id)
+            })
+            .map(|edge| edge.source_node_id)
+            .collect::<Vec<_>>();
+        if upstream.is_empty() {
+            break;
+        }
+        selected.extend(upstream);
+    }
+
+    let mut indegree = selected
+        .iter()
+        .copied()
+        .map(|node_id| (node_id, 0usize))
+        .collect::<HashMap<_, _>>();
+    let mut dependencies = HashMap::<Uuid, Vec<Uuid>>::new();
+    for edge in &flow_edges {
+        if selected.contains(&edge.source_node_id) && selected.contains(&edge.target_node_id) {
+            dependencies
+                .entry(edge.source_node_id)
+                .or_default()
+                .push(edge.target_node_id);
+            *indegree.get_mut(&edge.target_node_id).unwrap() += 1;
+        }
+    }
+    let mut ready = indegree
+        .iter()
+        .filter_map(|(node_id, count)| (*count == 0).then_some(*node_id))
+        .collect::<BTreeSet<_>>();
+    let mut node_order = Vec::with_capacity(selected.len());
+    while let Some(node_id) = ready.pop_first() {
+        node_order.push(node_id);
+        if let Some(next) = dependencies.get(&node_id) {
+            for target_node_id in next {
+                let count = indegree.get_mut(target_node_id).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    ready.insert(*target_node_id);
+                }
+            }
+        }
+    }
+    if node_order.len() != selected.len() {
+        return Err("The selected execution path contains a cycle");
     }
     Ok(HostExecutionPlan {
         entrypoint_node_id,
@@ -4028,6 +4078,243 @@ mod tests {
         let right_json = graph_json_for_canvas(&right, canvas_id);
         assert_eq!(left_json, right_json);
         assert_eq!(sha256_digest(&left_json), sha256_digest(&right_json));
+    }
+
+    #[test]
+    fn execution_plan_orders_multi_input_dependencies_before_the_consumer() {
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let analyze_id = Uuid::new_v4();
+        let output_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let analyze_ports = default_ports(analyze_id, "workspace.analyze");
+        let output_ports = default_ports(output_id, "output.text");
+        let mut store = Store::default();
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id: Uuid::new_v4(),
+                name: "Dependency order".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(input_id),
+                revision: 1,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        for node in [
+            CanvasNode {
+                id: input_id,
+                canvas_id,
+                name: "Input".to_string(),
+                kind: "input.text".to_string(),
+                ports: input_ports.clone(),
+                config: serde_json::Map::new(),
+            },
+            CanvasNode {
+                id: analyze_id,
+                canvas_id,
+                name: "Analyze".to_string(),
+                kind: "workspace.analyze".to_string(),
+                ports: analyze_ports.clone(),
+                config: serde_json::Map::new(),
+            },
+            CanvasNode {
+                id: output_id,
+                canvas_id,
+                name: "Output".to_string(),
+                kind: "output.text".to_string(),
+                ports: output_ports.clone(),
+                config: serde_json::Map::new(),
+            },
+        ] {
+            store.nodes.insert(node.id, node);
+        }
+        let port_id = |ports: &[CanvasPort], name: &str| {
+            ports.iter().find(|port| port.name == name).unwrap().id
+        };
+        for edge in [
+            CanvasEdge {
+                id: Uuid::new_v4(),
+                canvas_id,
+                source_node_id: input_id,
+                source_port_id: port_id(&input_ports, "Text"),
+                target_node_id: analyze_id,
+                target_port_id: port_id(&analyze_ports, "Request"),
+                kind: PortKind::Data,
+            },
+            CanvasEdge {
+                id: Uuid::new_v4(),
+                canvas_id,
+                source_node_id: input_id,
+                source_port_id: port_id(&input_ports, "Complete"),
+                target_node_id: analyze_id,
+                target_port_id: port_id(&analyze_ports, "Start"),
+                kind: PortKind::Flow,
+            },
+            CanvasEdge {
+                id: Uuid::new_v4(),
+                canvas_id,
+                source_node_id: analyze_id,
+                source_port_id: port_id(&analyze_ports, "Report"),
+                target_node_id: output_id,
+                target_port_id: port_id(&output_ports, "Input"),
+                kind: PortKind::Data,
+            },
+            CanvasEdge {
+                id: Uuid::new_v4(),
+                canvas_id,
+                source_node_id: analyze_id,
+                source_port_id: port_id(&analyze_ports, "Complete"),
+                target_node_id: output_id,
+                target_port_id: port_id(&output_ports, "Start"),
+                kind: PortKind::Flow,
+            },
+        ] {
+            store.edges.insert(edge.id, edge);
+        }
+
+        let plan = compile_host_execution_plan(&store, canvas_id).unwrap();
+        assert_eq!(plan.node_order, vec![input_id, analyze_id, output_id]);
+    }
+
+    #[test]
+    fn execution_plan_includes_upstream_data_sources_and_rejects_cycles() {
+        let canvas_id = Uuid::new_v4();
+        let input_id = Uuid::new_v4();
+        let output_id = Uuid::new_v4();
+        let input_ports = default_ports(input_id, "input.text");
+        let output_ports = default_ports(output_id, "output.text");
+        let mut store = Store::default();
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id: Uuid::new_v4(),
+                name: "Upstream source".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(output_id),
+                revision: 1,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        store.nodes.insert(
+            input_id,
+            CanvasNode {
+                id: input_id,
+                canvas_id,
+                name: "Input".to_string(),
+                kind: "input.text".to_string(),
+                ports: input_ports.clone(),
+                config: serde_json::Map::new(),
+            },
+        );
+        store.nodes.insert(
+            output_id,
+            CanvasNode {
+                id: output_id,
+                canvas_id,
+                name: "Output".to_string(),
+                kind: "output.text".to_string(),
+                ports: output_ports.clone(),
+                config: serde_json::Map::new(),
+            },
+        );
+        let data_edge = CanvasEdge {
+            id: Uuid::new_v4(),
+            canvas_id,
+            source_node_id: input_id,
+            source_port_id: input_ports
+                .iter()
+                .find(|port| port.name == "Text")
+                .unwrap()
+                .id,
+            target_node_id: output_id,
+            target_port_id: output_ports
+                .iter()
+                .find(|port| port.name == "Input")
+                .unwrap()
+                .id,
+            kind: PortKind::Data,
+        };
+        store.edges.insert(data_edge.id, data_edge);
+        assert_eq!(
+            compile_host_execution_plan(&store, canvas_id)
+                .unwrap()
+                .node_order,
+            vec![input_id, output_id]
+        );
+
+        let first_cycle_id = Uuid::new_v4();
+        let second_cycle_id = Uuid::new_v4();
+        let first_cycle_ports = default_ports(first_cycle_id, "workspace.analyze");
+        let second_cycle_ports = default_ports(second_cycle_id, "workspace.analyze");
+        for (node_id, ports) in [
+            (first_cycle_id, first_cycle_ports.clone()),
+            (second_cycle_id, second_cycle_ports.clone()),
+        ] {
+            store.nodes.insert(
+                node_id,
+                CanvasNode {
+                    id: node_id,
+                    canvas_id,
+                    name: "Cycle".to_string(),
+                    kind: "workspace.analyze".to_string(),
+                    ports,
+                    config: serde_json::Map::new(),
+                },
+            );
+        }
+        store
+            .canvases
+            .get_mut(&canvas_id)
+            .unwrap()
+            .default_entrypoint_node_id = Some(first_cycle_id);
+        store
+            .nodes
+            .retain(|node_id, _| *node_id == first_cycle_id || *node_id == second_cycle_id);
+        store.edges.clear();
+        for (source_id, source_ports, target_id, target_ports) in [
+            (
+                first_cycle_id,
+                &first_cycle_ports,
+                second_cycle_id,
+                &second_cycle_ports,
+            ),
+            (
+                second_cycle_id,
+                &second_cycle_ports,
+                first_cycle_id,
+                &first_cycle_ports,
+            ),
+        ] {
+            let edge = CanvasEdge {
+                id: Uuid::new_v4(),
+                canvas_id,
+                source_node_id: source_id,
+                source_port_id: source_ports
+                    .iter()
+                    .find(|port| port.name == "Complete")
+                    .unwrap()
+                    .id,
+                target_node_id: target_id,
+                target_port_id: target_ports
+                    .iter()
+                    .find(|port| port.name == "Start")
+                    .unwrap()
+                    .id,
+                kind: PortKind::Flow,
+            };
+            store.edges.insert(edge.id, edge);
+        }
+        assert_eq!(
+            compile_host_execution_plan(&store, canvas_id).unwrap_err(),
+            "The selected execution path contains a cycle"
+        );
     }
 
     #[tokio::test]
