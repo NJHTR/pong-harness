@@ -1071,6 +1071,7 @@ fn validate_canvas_graph(store: &Store, canvas_id: Uuid) -> Result<(), &'static 
         "output.text",
         "workspace.scan",
         "workspace.analyze",
+        "workspace.context",
         "file.read_text",
         "agent.analyze",
     ];
@@ -1267,6 +1268,7 @@ fn primary_value_output_port_id(node: &CanvasNode) -> Option<Uuid> {
         "input.file" => "File",
         "workspace.scan" => "Result",
         "workspace.analyze" => "Report",
+        "workspace.context" => "Context",
         "file.read_text" => "Content",
         "agent.analyze" => "Result",
         _ => "Result",
@@ -2085,6 +2087,415 @@ fn resolve_project_analysis(
     .map_err(|error| format!("Unable to serialize project analysis: {error}"))
 }
 
+fn project_context_file_priority(relative: &str, request_terms: &[String]) -> i32 {
+    let lower = relative.to_ascii_lowercase();
+    let name = FsPath::new(relative)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut priority = if matches!(
+        name.as_str(),
+        "pom.xml"
+            | "package.json"
+            | "cargo.toml"
+            | "pyproject.toml"
+            | "go.mod"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "settings.gradle"
+            | "settings.gradle.kts"
+            | "readme.md"
+            | "readme"
+    ) {
+        0
+    } else if matches!(
+        name.as_str(),
+        "main.rs"
+            | "main.go"
+            | "main.py"
+            | "app.py"
+            | "main.ts"
+            | "main.tsx"
+            | "index.ts"
+            | "index.tsx"
+            | "program.cs"
+    ) || name.ends_with("application.java")
+    {
+        10
+    } else if lower.contains("/src/main/") || lower.starts_with("src/main/") {
+        20
+    } else if lower.contains("/src/") || lower.starts_with("src/") {
+        30
+    } else if lower.contains("/test") || lower.starts_with("test") {
+        50
+    } else {
+        40
+    };
+    if request_terms.iter().any(|term| lower.contains(term)) {
+        priority -= 15;
+    }
+    priority
+}
+
+fn is_sensitive_project_context_file(relative: &str) -> bool {
+    let lower = relative.to_ascii_lowercase();
+    let name = FsPath::new(relative)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name == ".env"
+        || name.starts_with(".env.")
+        || matches!(
+            name.as_str(),
+            "id_rsa"
+                | "id_ed25519"
+                | "credentials"
+                | "credentials.json"
+                | "secrets.json"
+                | "application-prod.properties"
+                | "application-production.properties"
+                | "application-prod.yml"
+                | "application-prod.yaml"
+        )
+        || [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+        || lower
+            .split('/')
+            .any(|segment| matches!(segment, ".ssh" | ".aws" | ".gnupg"))
+        || name.contains("credential")
+        || name.contains("secret")
+}
+
+fn contains_likely_secret(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    [
+        "-----begin private key-----",
+        "-----begin rsa private key-----",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "client_secret",
+        "private_key",
+        "authorization: bearer ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn is_project_context_text_file(path: &FsPath) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "pom.xml"
+            | "package.json"
+            | "cargo.toml"
+            | "pyproject.toml"
+            | "requirements.txt"
+            | "go.mod"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "settings.gradle"
+            | "settings.gradle.kts"
+            | "readme"
+            | "readme.md"
+    ) {
+        return true;
+    }
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "rs" | "java"
+                    | "kt"
+                    | "kts"
+                    | "ts"
+                    | "tsx"
+                    | "js"
+                    | "jsx"
+                    | "mjs"
+                    | "cjs"
+                    | "py"
+                    | "go"
+                    | "cs"
+                    | "c"
+                    | "h"
+                    | "cpp"
+                    | "cc"
+                    | "cxx"
+                    | "hpp"
+                    | "sql"
+                    | "html"
+                    | "css"
+                    | "scss"
+                    | "less"
+                    | "xml"
+                    | "json"
+                    | "yaml"
+                    | "yml"
+                    | "toml"
+                    | "md"
+                    | "gradle"
+                    | "properties"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn read_project_context_excerpt(path: &FsPath, max_bytes: usize) -> Result<(String, bool), String> {
+    let mut bytes = Vec::with_capacity(max_bytes.saturating_add(1));
+    File::open(path)
+        .map_err(|error| format!("Unable to open {}: {error}", path.display()))?
+        .take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Unable to read {}: {error}", path.display()))?;
+    if bytes.contains(&0) {
+        return Err("Binary files are not included in project context".to_string());
+    }
+    let truncated = bytes.len() > max_bytes;
+    if truncated {
+        bytes.truncate(max_bytes);
+        while std::str::from_utf8(&bytes).is_err() {
+            bytes.pop();
+        }
+    }
+    let content = String::from_utf8(bytes)
+        .map_err(|error| format!("Unable to read {} as UTF-8 text: {error}", path.display()))?;
+    Ok((content, truncated))
+}
+
+fn resolve_project_context(
+    store: &Store,
+    canvas_id: Uuid,
+    node: &CanvasNode,
+    port_values: &HashMap<Uuid, RuntimeValue>,
+) -> Result<String, String> {
+    let canvas = store
+        .canvases
+        .get(&canvas_id)
+        .ok_or_else(|| "Canvas was not found".to_string())?;
+    let workspace = store
+        .workspaces
+        .get(&canvas.workspace_id)
+        .ok_or_else(|| "Workspace was not found".to_string())?;
+    let root = FsPath::new(&workspace.path);
+    if !root.is_dir() {
+        return Err(format!(
+            "Workspace path is not an accessible directory: {}",
+            root.display()
+        ));
+    }
+    let request = connected_text_value(store, canvas_id, node, "Request", port_values)
+        .or_else(|| {
+            node.config
+                .get("request")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "Analyze this project carefully".to_string());
+    let structure = connected_rendered_value(store, canvas_id, node, "Structure", port_values)?;
+    let max_files = node
+        .config
+        .get("maxFiles")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(8)
+        .clamp(1, 32) as usize;
+    let max_bytes_per_file = node
+        .config
+        .get("maxBytesPerFile")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(16 * 1024)
+        .clamp(1024, 64 * 1024) as usize;
+    let max_total_bytes = node
+        .config
+        .get("maxTotalBytes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(128 * 1024)
+        .clamp(1024, 180 * 1024) as usize;
+    let max_entries = node
+        .config
+        .get("maxEntries")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(5000)
+        .clamp(1, 20_000) as usize;
+    let max_depth = node
+        .config
+        .get("maxDepth")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(16)
+        .clamp(1, 32) as usize;
+    let request_terms = request
+        .split(|character: char| {
+            !character.is_alphanumeric() && character != '_' && character != '-'
+        })
+        .map(str::to_ascii_lowercase)
+        .filter(|term| term.chars().count() >= 3)
+        .collect::<Vec<_>>();
+    let ignored = [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".idea",
+        ".gradle",
+        ".venv",
+        "vendor",
+        "coverage",
+        ".next",
+        "out",
+    ];
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut candidates = Vec::<(i32, String, PathBuf, u64)>::new();
+    let mut inspected_entries = 0usize;
+    let mut truncated_inventory = false;
+    let mut omitted_sensitive = Vec::<String>::new();
+
+    while let Some((directory, depth)) = pending.pop() {
+        let listing = read_dir(&directory)
+            .map_err(|error| format!("Unable to read {}: {error}", directory.display()))?;
+        for item in listing {
+            if inspected_entries >= max_entries {
+                truncated_inventory = true;
+                break;
+            }
+            inspected_entries += 1;
+            let item =
+                item.map_err(|error| format!("Unable to inspect workspace entry: {error}"))?;
+            let file_type = item
+                .file_type()
+                .map_err(|error| format!("Unable to inspect {}: {error}", item.path().display()))?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = item.path();
+            let name = item.file_name().to_string_lossy().to_string();
+            if file_type.is_dir() {
+                if ignored.contains(&name.as_str()) {
+                    continue;
+                }
+                if depth < max_depth {
+                    pending.push((path, depth + 1));
+                } else {
+                    truncated_inventory = true;
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(path.as_path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            if is_sensitive_project_context_file(&relative) {
+                omitted_sensitive.push(relative);
+                continue;
+            }
+            if !is_project_context_text_file(&path) {
+                continue;
+            }
+            let size = item.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            candidates.push((
+                project_context_file_priority(&relative, &request_terms),
+                relative,
+                path,
+                size,
+            ));
+        }
+        if truncated_inventory {
+            break;
+        }
+    }
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut selected_files = Vec::<serde_json::Value>::new();
+    let mut omitted_binary_or_invalid = Vec::<String>::new();
+    let mut omitted_likely_secret = Vec::<String>::new();
+    let mut total_bytes = 0usize;
+    for (_, relative, path, size) in candidates {
+        if selected_files.len() >= max_files || total_bytes >= max_total_bytes {
+            break;
+        }
+        let remaining = max_total_bytes - total_bytes;
+        let file_limit = max_bytes_per_file.min(remaining);
+        if file_limit == 0 {
+            break;
+        }
+        let (content, truncated) = match read_project_context_excerpt(&path, file_limit) {
+            Ok(result) => result,
+            Err(_) => {
+                omitted_binary_or_invalid.push(relative);
+                continue;
+            }
+        };
+        if contains_likely_secret(&content) {
+            omitted_likely_secret.push(relative);
+            continue;
+        }
+        total_bytes += content.len();
+        selected_files.push(serde_json::json!({
+            "path": relative,
+            "sizeBytes": size,
+            "includedBytes": content.len(),
+            "truncated": truncated,
+            "content": content
+        }));
+    }
+    omitted_sensitive.sort();
+    omitted_binary_or_invalid.sort();
+    omitted_likely_secret.sort();
+    let structure = structure.map(|value| {
+        serde_json::from_str::<serde_json::Value>(&value)
+            .unwrap_or_else(|_| serde_json::Value::String(value))
+    });
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "schemaVersion": "seekwd.project-context/0.1",
+        "request": request,
+        "workspace": {
+            "name": workspace.name,
+            "path": workspace.path
+        },
+        "structure": structure,
+        "selectedFiles": selected_files,
+        "omitted": {
+            "sensitivePaths": omitted_sensitive,
+            "likelySecrets": omitted_likely_secret,
+            "binaryOrInvalidText": omitted_binary_or_invalid
+        },
+        "inventory": {
+            "inspectedEntries": inspected_entries,
+            "truncated": truncated_inventory
+        },
+        "limits": {
+            "maxFiles": max_files,
+            "maxBytesPerFile": max_bytes_per_file,
+            "maxTotalBytes": max_total_bytes,
+            "maxEntries": max_entries,
+            "maxDepth": max_depth
+        },
+        "securityBoundary": {
+            "workspaceReadOnly": true,
+            "networkAccess": false,
+            "ignoredDirectories": ignored,
+            "symlinksFollowed": false,
+            "sensitivePathFiltering": true,
+            "likelySecretContentFiltering": true
+        }
+    }))
+    .map_err(|error| format!("Unable to serialize project context: {error}"))
+}
+
 fn resolve_run_output(
     store: &Store,
     canvas_id: Uuid,
@@ -2210,6 +2621,16 @@ async fn advance_host_execution(
                     .map_err(|error| format!("Project analysis produced invalid JSON: {error}"))?;
                 let port_id = output_port_id(node, "Report").ok_or_else(|| {
                     "Project Analyze is missing its Report output port".to_string()
+                })?;
+                port_values.insert(port_id, RuntimeValue::Json { value: json });
+                final_result = Some(value);
+            }
+            "workspace.context" => {
+                let value = resolve_project_context(&store, canvas_id, node, &port_values)?;
+                let json = serde_json::from_str(&value)
+                    .map_err(|error| format!("Project context produced invalid JSON: {error}"))?;
+                let port_id = output_port_id(node, "Context").ok_or_else(|| {
+                    "Build Project Context is missing its Context output port".to_string()
                 })?;
                 port_values.insert(port_id, RuntimeValue::Json { value: json });
                 final_result = Some(value);
@@ -2480,6 +2901,13 @@ fn known_port_contract(kind: &str) -> Option<Vec<PortContract>> {
             output("Report", PortKind::Data, Some("Result")),
             output("Complete", PortKind::Flow, Some("Complete")),
         ]),
+        "workspace.context" => Some(vec![
+            input("Start", PortKind::Flow, Some("Start")),
+            input("Request", PortKind::Data, Some("Input")),
+            input("Structure", PortKind::Data, None),
+            output("Context", PortKind::Data, Some("Result")),
+            output("Complete", PortKind::Flow, Some("Complete")),
+        ]),
         "file.read_text" => Some(vec![
             input("Start", PortKind::Flow, Some("Start")),
             input("Path", PortKind::Data, Some("Input")),
@@ -2661,6 +3089,13 @@ fn default_ports(node_id: Uuid, kind: &str) -> Vec<CanvasPort> {
             port(node_id, "Start", PortDirection::Input, PortKind::Flow),
             port(node_id, "Request", PortDirection::Input, PortKind::Data),
             port(node_id, "Report", PortDirection::Output, PortKind::Data),
+            port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
+        ],
+        "workspace.context" => vec![
+            port(node_id, "Start", PortDirection::Input, PortKind::Flow),
+            port(node_id, "Request", PortDirection::Input, PortKind::Data),
+            port(node_id, "Structure", PortDirection::Input, PortKind::Data),
+            port(node_id, "Context", PortDirection::Output, PortKind::Data),
             port(node_id, "Complete", PortDirection::Output, PortKind::Flow),
         ],
         "file.read_text" => vec![
@@ -4428,6 +4863,181 @@ mod tests {
             }
             HostRunAdvance::Waiting { .. } => panic!("submitted input must resume the plan"),
         }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_context_selects_bounded_source_and_filters_sensitive_material() {
+        let root = std::env::temp_dir().join(format!("pong-host-context-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src/main/java/com/example")).unwrap();
+        std::fs::write(
+            root.join("pom.xml"),
+            "<project><artifactId>demo</artifactId></project>",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main/java/com/example/DemoApplication.java"),
+            "class DemoApplication { public static void main(String[] args) {} }",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main/java/com/example/config.properties"),
+            "client_secret=must-not-leave-the-workspace",
+        )
+        .unwrap();
+        std::fs::write(root.join(".env"), "API_KEY=must-not-leave-the-workspace").unwrap();
+
+        let workspace_id = Uuid::new_v4();
+        let canvas_id = Uuid::new_v4();
+        let request_node_id = Uuid::new_v4();
+        let structure_node_id = Uuid::new_v4();
+        let context_node_id = Uuid::new_v4();
+        let request_ports = default_ports(request_node_id, "input.text");
+        let structure_ports = default_ports(structure_node_id, "input.text");
+        let context_ports = default_ports(context_node_id, "workspace.context");
+        let request_output = request_ports
+            .iter()
+            .find(|port| port.name == "Text")
+            .unwrap()
+            .id;
+        let structure_output = structure_ports
+            .iter()
+            .find(|port| port.name == "Text")
+            .unwrap()
+            .id;
+        let request_input = context_ports
+            .iter()
+            .find(|port| port.name == "Request")
+            .unwrap()
+            .id;
+        let structure_input = context_ports
+            .iter()
+            .find(|port| port.name == "Structure")
+            .unwrap()
+            .id;
+        let mut store = Store::default();
+        store.workspaces.insert(
+            workspace_id,
+            Workspace {
+                id: workspace_id,
+                name: "Backend".to_string(),
+                path: root.to_string_lossy().to_string(),
+                updated_at: now(),
+            },
+        );
+        store.canvases.insert(
+            canvas_id,
+            Canvas {
+                id: canvas_id,
+                workspace_id,
+                name: "Analyze".to_string(),
+                status: RunStatus::Idle,
+                default_entrypoint_node_id: Some(request_node_id),
+                revision: 0,
+                draft_revision: 0,
+                draft_dirty: false,
+                updated_at: now(),
+            },
+        );
+        for (id, name, kind, ports) in [
+            (
+                request_node_id,
+                "Request",
+                "input.text",
+                request_ports.clone(),
+            ),
+            (
+                structure_node_id,
+                "Structure",
+                "input.text",
+                structure_ports.clone(),
+            ),
+            (
+                context_node_id,
+                "Build Project Context",
+                "workspace.context",
+                context_ports.clone(),
+            ),
+        ] {
+            store.nodes.insert(
+                id,
+                CanvasNode {
+                    id,
+                    canvas_id,
+                    name: name.to_string(),
+                    kind: kind.to_string(),
+                    ports,
+                    config: serde_json::Map::new(),
+                },
+            );
+        }
+        for (source_node_id, source_port_id, target_port_id) in [
+            (request_node_id, request_output, request_input),
+            (structure_node_id, structure_output, structure_input),
+        ] {
+            let edge_id = Uuid::new_v4();
+            store.edges.insert(
+                edge_id,
+                CanvasEdge {
+                    id: edge_id,
+                    canvas_id,
+                    source_node_id,
+                    source_port_id,
+                    target_node_id: context_node_id,
+                    target_port_id,
+                    kind: PortKind::Data,
+                },
+            );
+        }
+        let values = HashMap::from([
+            (
+                request_output,
+                RuntimeValue::text("Analyze DemoApplication and its build"),
+            ),
+            (
+                structure_output,
+                RuntimeValue::text(r#"{"projectTypes":["Java / Maven"]}"#),
+            ),
+        ]);
+
+        let result = resolve_project_context(
+            &store,
+            canvas_id,
+            store.nodes.get(&context_node_id).unwrap(),
+            &values,
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            json["structure"]["projectTypes"][0],
+            serde_json::json!("Java / Maven")
+        );
+        let selected = json["selectedFiles"].as_array().unwrap();
+        assert!(selected.iter().any(|file| file["path"] == "pom.xml"));
+        assert!(selected.iter().any(|file| {
+            file["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("DemoApplication.java")
+        }));
+        assert!(!result.contains("must-not-leave-the-workspace"));
+        assert!(
+            json["omitted"]["sensitivePaths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path == ".env")
+        );
+        assert!(
+            json["omitted"]["likelySecrets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path.as_str().unwrap().ends_with("config.properties"))
+        );
+        assert_eq!(json["securityBoundary"]["workspaceReadOnly"], true);
+        assert_eq!(json["securityBoundary"]["networkAccess"], false);
 
         std::fs::remove_dir_all(root).unwrap();
     }
