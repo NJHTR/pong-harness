@@ -2,6 +2,7 @@
 
 use std::{
     env, fs, io,
+    io::{BufRead, BufReader},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -12,6 +13,7 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 const HOST_URL: &str = "http://127.0.0.1:4317";
+const HOST_READY_LINE: &str = "pong-host listening on http://127.0.0.1:4317";
 const AGENT_KEYRING_SERVICE: &str = "com.seekwd.workbench.agent";
 const AGENT_KEYRING_USER: &str = "default";
 
@@ -325,16 +327,31 @@ fn spawn_host(app: &tauri::AppHandle, token: &str) -> io::Result<Child> {
             "PONG_HOST_ALLOWED_ORIGIN",
             host_allowed_origin(cfg!(debug_assertions)),
         )
+        .env("PONG_HOST_PARENT_WATCH", "stdin-eof")
         .env("PONG_HOST_DB", database)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    command.spawn()
+    let mut child = command.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("pong-host stdout was not available"))?;
+    let mut ready_line = String::new();
+    let read = BufReader::new(stdout).read_line(&mut ready_line)?;
+    if read > 0 && ready_line.trim() == HOST_READY_LINE {
+        return Ok(child);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(io::Error::other(
+        "pong-host exited before completing its startup handshake",
+    ))
 }
 
 fn main() {

@@ -20,9 +20,10 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
     fs::{File, OpenOptions, read_dir},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
+    thread,
     time::Duration,
 };
 use subtle::ConstantTimeEq;
@@ -30,6 +31,11 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 const HOST_AUTHORITY: &str = "127.0.0.1:4317";
+const HOST_BIND_ADDRESS: &str = "127.0.0.1:4317";
+const HOST_READY_LINE: &str = "pong-host listening on http://127.0.0.1:4317";
+const PARENT_WATCH_MODE: &str = "stdin-eof";
+const STARTUP_RETRY_ATTEMPTS: usize = 40;
+const STARTUP_RETRY_DELAY: Duration = Duration::from_millis(50);
 const CURRENT_DATABASE_VERSION: i64 = 1;
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const HOST_TABLES: [&str; 3] = ["host_state", "command_journal", "host_events"];
@@ -61,6 +67,73 @@ impl Drop for InstanceLock {
         let _ = self.file.sync_all();
         let _ = self.file.unlock();
     }
+}
+
+fn parse_parent_watch(value: Option<&str>) -> Result<bool, &'static str> {
+    match value {
+        None => Ok(false),
+        Some(PARENT_WATCH_MODE) => Ok(true),
+        Some(_) => Err("PONG_HOST_PARENT_WATCH must be stdin-eof when configured"),
+    }
+}
+
+fn start_parent_watch(enabled: bool) {
+    if !enabled {
+        return;
+    }
+    thread::spawn(|| {
+        let mut stdin = io::stdin().lock();
+        let mut buffer = [0_u8; 64];
+        loop {
+            match stdin.read(&mut buffer) {
+                Ok(0) | Err(_) => std::process::exit(0),
+                Ok(_) => {}
+            }
+        }
+    });
+}
+
+async fn acquire_instance_lock(
+    database_path: &PathBuf,
+    retry_startup: bool,
+) -> io::Result<InstanceLock> {
+    let attempts = if retry_startup {
+        STARTUP_RETRY_ATTEMPTS
+    } else {
+        1
+    };
+    for attempt in 0..attempts {
+        match InstanceLock::acquire(database_path) {
+            Ok(lock) => return Ok(lock),
+            Err(error)
+                if error.kind() == io::ErrorKind::AlreadyExists && attempt + 1 < attempts =>
+            {
+                tokio::time::sleep(STARTUP_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("startup lock attempts always return or retry")
+}
+
+async fn bind_host_listener(retry_startup: bool) -> io::Result<tokio::net::TcpListener> {
+    let attempts = if retry_startup {
+        STARTUP_RETRY_ATTEMPTS
+    } else {
+        1
+    };
+    for attempt in 0..attempts {
+        match tokio::net::TcpListener::bind(HOST_BIND_ADDRESS).await {
+            Ok(listener) => return Ok(listener),
+            Err(error)
+                if error.kind() == io::ErrorKind::AddrInUse && attempt + 1 < attempts =>
+            {
+                tokio::time::sleep(STARTUP_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("startup bind attempts always return or retry")
 }
 
 #[derive(Clone)]
@@ -2688,11 +2761,19 @@ async fn start_run(
 #[tokio::main]
 async fn main() {
     let security = SecurityConfig::from_env().expect("configure local Host access");
+    let watch_parent = parse_parent_watch(
+        env::var("PONG_HOST_PARENT_WATCH")
+            .ok()
+            .as_deref(),
+    )
+    .expect("configure Host parent lifecycle");
+    start_parent_watch(watch_parent);
     let database_path = env::var_os("PONG_HOST_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("pong-host.sqlite3"));
-    let _instance_lock =
-        InstanceLock::acquire(&database_path).expect("acquire local Host instance lock");
+    let _instance_lock = acquire_instance_lock(&database_path, watch_parent)
+        .await
+        .expect("acquire local Host instance lock");
     let (connection, store, snapshot_version) =
         open_database(database_path).expect("open pong-host database");
     let state = AppState {
@@ -2713,10 +2794,11 @@ async fn main() {
         schedule_run_execution(state.clone(), run_id);
     }
     let app = router(state, security);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:4317")
+    let listener = bind_host_listener(watch_parent)
         .await
         .expect("bind host");
-    println!("pong-host listening on http://127.0.0.1:4317");
+    println!("{HOST_READY_LINE}");
+    io::stdout().flush().expect("flush Host startup handshake");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
@@ -2795,6 +2877,13 @@ mod tests {
 
     fn test_security() -> SecurityConfig {
         SecurityConfig::new(TEST_TOKEN.to_string(), TEST_ORIGIN).unwrap()
+    }
+
+    #[test]
+    fn parent_watch_mode_is_explicit_and_closed() {
+        assert!(!parse_parent_watch(None).unwrap());
+        assert!(parse_parent_watch(Some("stdin-eof")).unwrap());
+        assert!(parse_parent_watch(Some("pid")).is_err());
     }
 
     fn store_port_id(state: &AppState, node_id: Uuid, name: &str) -> Uuid {
