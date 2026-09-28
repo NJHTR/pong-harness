@@ -168,7 +168,6 @@ function App({ client }: { client: HostClient }) {
     instructions: "",
   });
   const [agentKeyConfigured, setAgentKeyConfigured] = useState(false);
-  const [agentResponse, setAgentResponse] = useState("");
   const [portDialogNodeId, setPortDialogNodeId] = useState<string>();
   const [portName, setPortName] = useState("");
   const [portDirection, setPortDirection] = useState<"input" | "output">("input");
@@ -645,6 +644,15 @@ function App({ client }: { client: HostClient }) {
     }
   };
 
+  const configuredAgentNode = (position: { x: number; y: number }) => ({
+    provider: "openai_compatible",
+    endpoint: agentSettings.endpoint.trim(),
+    model: agentSettings.model.trim(),
+    environment: agentSettings.environment,
+    instructions: agentSettings.instructions,
+    position,
+  });
+
   const createProjectAnalysisWorkflow = async (request: string) => {
     if (!activeWorkspace) {
       showNotice("Choose a workspace", "Open the local project folder you want to analyze first.", "warning");
@@ -656,10 +664,15 @@ function App({ client }: { client: HostClient }) {
         : await client.createCanvas({ workspaceId: activeWorkspace.id, name: "Project Analysis" });
       const input = await client.createNode({ canvasId: canvas.id, name: "Analysis Request", kind: "input.text" });
       const analyze = await client.createNode({ canvasId: canvas.id, name: "Project Analyze", kind: "workspace.analyze" });
+      const agentConfigured = agentKeyConfigured && Boolean(agentSettings.endpoint.trim()) && Boolean(agentSettings.model.trim());
+      const agent = agentConfigured
+        ? await client.createNode({ canvasId: canvas.id, name: "Agent Analyze", kind: "agent.analyze" })
+        : undefined;
       const output = await client.createNode({ canvasId: canvas.id, name: "Analysis Report", kind: "output.text" });
       await client.updateNode({ nodeId: input.id, config: { inputValue: request, position: { x: 70, y: 170 } } });
       await client.updateNode({ nodeId: analyze.id, config: { maxEntries: 5000, maxDepth: 16, position: { x: 390, y: 170 } } });
-      await client.updateNode({ nodeId: output.id, config: { position: { x: 730, y: 170 } } });
+      if (agent) await client.updateNode({ nodeId: agent.id, config: configuredAgentNode({ x: 730, y: 170 }) });
+      await client.updateNode({ nodeId: output.id, config: { position: { x: agent ? 1070 : 730, y: 170 } } });
 
       const connect = async (
         source: WireNode,
@@ -682,8 +695,16 @@ function App({ client }: { client: HostClient }) {
       };
       await connect(input, "Text", analyze, "Request", "data");
       await connect(input, "Complete", analyze, "Start", "flow");
-      await connect(analyze, "Report", output, "Input", "data");
-      await connect(analyze, "Complete", output, "Start", "flow");
+      if (agent) {
+        await connect(input, "Text", agent, "Goal", "data");
+        await connect(analyze, "Report", agent, "Context", "data");
+        await connect(analyze, "Complete", agent, "Start", "flow");
+        await connect(agent, "Result", output, "Input", "data");
+        await connect(agent, "Complete", output, "Start", "flow");
+      } else {
+        await connect(analyze, "Report", output, "Input", "data");
+        await connect(analyze, "Complete", output, "Start", "flow");
+      }
       await client.setDefaultEntrypoint(canvas.id, input.id);
       const revision = await client.saveRevision(canvas.id);
       await client.startRun({
@@ -702,6 +723,64 @@ function App({ client }: { client: HostClient }) {
       showNotice("Project analysis started", `${canvas.name} is inspecting ${activeWorkspace.name} through the local restricted Host.`, "info");
     } catch (error) {
       reportError(error, "Unable to create the project analysis workflow");
+    }
+  };
+
+  const createAgentWorkflow = async (request: string) => {
+    if (!activeWorkspace) {
+      showNotice("Choose a workspace", "Open a local project folder before creating an Agent workflow.", "warning");
+      return;
+    }
+    if (!agentKeyConfigured || !agentSettings.endpoint.trim() || !agentSettings.model.trim()) {
+      showNotice("Configure an Agent", "Add an endpoint, model, and API key in Settings before running an Agent node.", "warning");
+      return;
+    }
+    try {
+      const canvas = activeCanvas && canvasNodes.length === 0
+        ? activeCanvas
+        : await client.createCanvas({ workspaceId: activeWorkspace.id, name: "Agent Request" });
+      const input = await client.createNode({ canvasId: canvas.id, name: "Agent Goal", kind: "input.text" });
+      const agent = await client.createNode({ canvasId: canvas.id, name: "Agent Analyze", kind: "agent.analyze" });
+      const output = await client.createNode({ canvasId: canvas.id, name: "Agent Result", kind: "output.text" });
+      await client.updateNode({ nodeId: input.id, config: { inputValue: request, position: { x: 90, y: 170 } } });
+      await client.updateNode({ nodeId: agent.id, config: configuredAgentNode({ x: 430, y: 170 }) });
+      await client.updateNode({ nodeId: output.id, config: { position: { x: 770, y: 170 } } });
+
+      const connect = async (source: WireNode, sourcePortName: string, target: WireNode, targetPortName: string, kind: PortKind) => {
+        const sourcePort = source.ports.find((port) => port.name === sourcePortName && port.direction === "output");
+        const targetPort = target.ports.find((port) => port.name === targetPortName && port.direction === "input");
+        if (!sourcePort || !targetPort) throw new Error(`Missing ${sourcePortName} → ${targetPortName} ports`);
+        await client.createEdge({
+          canvasId: canvas.id,
+          sourceNodeId: source.id,
+          sourcePortId: sourcePort.id,
+          targetNodeId: target.id,
+          targetPortId: targetPort.id,
+          kind,
+        });
+      };
+      await connect(input, "Text", agent, "Goal", "data");
+      await connect(input, "Complete", agent, "Start", "flow");
+      await connect(agent, "Result", output, "Input", "data");
+      await connect(agent, "Complete", output, "Start", "flow");
+      await client.setDefaultEntrypoint(canvas.id, input.id);
+      const revision = await client.saveRevision(canvas.id);
+      await client.startRun({
+        canvasId: canvas.id,
+        revision: revision.revision,
+        entrypoint: "default",
+        entrypointId: `${canvas.id}:default`,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setWorkspaceId(activeWorkspace.id);
+      setCanvasId(canvas.id);
+      setOpenCanvasIds((current) => current.includes(canvas.id) ? current : [...current, canvas.id]);
+      setSelectedNodeId(agent.id);
+      setRunPanelOpen(true);
+      setSurface("canvas");
+      showNotice("Agent workflow started", `${canvas.name} is running through the local Host execution plan.`, "info");
+    } catch (error) {
+      reportError(error, "Unable to create the Agent workflow");
     }
   };
 
@@ -789,20 +868,7 @@ function App({ client }: { client: HostClient }) {
       return;
     }
     if (agentKeyConfigured && agentSettings.endpoint.trim() && agentSettings.model.trim()) {
-      try {
-        const response = await invoke<string>("run_agent_prompt", {
-          endpoint: agentSettings.endpoint,
-          model: agentSettings.model,
-          prompt: normalizedValue,
-          workspaceName: activeWorkspace?.name ?? "Workspace",
-          environment: agentSettings.environment,
-          instructions: agentSettings.instructions,
-        });
-        setAgentResponse(response);
-        showNotice("Agent response received", `${agentSettings.name} returned a response.`, "success");
-      } catch (error) {
-        reportError(error, "Unable to run Agent request");
-      }
+      await createAgentWorkflow(normalizedValue);
       return;
     }
     await runCanvas(normalizedValue);
@@ -827,7 +893,12 @@ function App({ client }: { client: HostClient }) {
         name,
         kind,
       });
-      if (position) await client.updateNode({ nodeId: node.id, config: { position } });
+      const config = kind === "agent.analyze"
+        ? configuredAgentNode(position ?? { x: 420, y: 180 })
+        : position
+          ? { position }
+          : undefined;
+      if (config) await client.updateNode({ nodeId: node.id, config });
       setSelectedNodeId(node.id);
       setNodeLibraryOpen(false);
       showNotice("Node added", `${name} was added to the canvas.`, "success");
@@ -998,7 +1069,7 @@ function App({ client }: { client: HostClient }) {
             scopeEnabled={composerScopeEnabled}
             agentConfigured={agentKeyConfigured && Boolean(agentSettings.endpoint.trim()) && Boolean(agentSettings.model.trim())}
             agentName={agentSettings.name}
-            agentResponse={agentResponse}
+            agentResponse={latestRun?.status === "succeeded" ? latestRun.result ?? "" : ""}
             canvas={activeCanvas}
             openCanvases={snapshot.canvases.filter((item) => openCanvasIds.includes(item.id))}
             nodes={canvasNodes}
@@ -1733,6 +1804,7 @@ function NodeLibrary({ onAdd, onClose }: { onAdd: (name: string) => void; onClos
     { name: "Workspace Scan", category: "Workspace", description: "List files and directories in the selected workspace", icon: <FolderOpen />, available: true },
     { name: "Project Analyze", category: "Workspace", description: "Inspect project structure, manifests, languages, tests, and entrypoints", icon: <FileSearch />, available: true },
     { name: "Read Text File", category: "Workspace", description: "Read one UTF-8 text file inside the selected workspace", icon: <FileText />, available: true },
+    { name: "Agent Analyze", category: "Agent", description: "Analyze an explicitly connected goal and context with the configured model", icon: <Bot />, available: true },
     { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen />, available: false },
     { name: "Human Approval", category: "Control", description: "Preview: approval executor is not installed", icon: <Pause />, available: false },
     { name: "Event Trigger", category: "Trigger", description: "Preview: event delivery is not installed", icon: <Zap />, available: false },
@@ -1850,13 +1922,17 @@ function NodeInspector({ node, canvas, configDraft, onAddPort, onDeleteNode, onF
   const inputValue = typeof configDraft?.inputValue === "string" ? configDraft.inputValue : typeof node.config?.inputValue === "string" ? node.config.inputValue : "";
   const instruction = typeof configDraft?.instruction === "string" ? configDraft.instruction : typeof node.config?.instruction === "string" ? node.config.instruction : "";
   const filePath = typeof configDraft?.path === "string" ? configDraft.path : typeof node.config?.path === "string" ? node.config.path : "";
+  const agentEndpoint = typeof configDraft?.endpoint === "string" ? configDraft.endpoint : typeof node.config?.endpoint === "string" ? node.config.endpoint : "";
+  const agentModel = typeof configDraft?.model === "string" ? configDraft.model : typeof node.config?.model === "string" ? node.config.model : "";
+  const agentInstructions = typeof configDraft?.instructions === "string" ? configDraft.instructions : typeof node.config?.instructions === "string" ? node.config.instructions : "";
+  const agentEnvironment = typeof configDraft?.environment === "string" ? configDraft.environment : typeof node.config?.environment === "string" ? node.config.environment : "Response only";
   const updateConfig = (config: Record<string, unknown>) => onUpdateNode?.(node.id, { config });
   return (
     <>
       <PanelHeader title="Inspector" trailing={<Menu label="Node actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Delete node", icon: <Trash2 />, onSelect: () => onDeleteNode?.() }]} />} />
       <div className="inspector-summary"><span className="summary-icon">{definition.icon}</span><span><strong>{node.name}</strong><small>{definition.typeLabel}</small></span></div>
       <InspectorSection title="General"><PropertyRow label="Name"><TextField value={node.name} readOnly aria-label="Node name" /></PropertyRow><PropertyRow label="Kind"><code className="inspector-code">{node.kind}</code></PropertyRow></InspectorSection>
-      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is the single manual entrypoint. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "file.read_text" ? <PropertyRow label="Relative path"><TextField aria-label="Workspace-relative file path" value={filePath} placeholder="src/main/java/App.java" onChange={(event) => updateConfig({ path: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}</InspectorSection>
+      <InspectorSection title="How this node works"><p className="inspector-help">{definition.description}</p>{node.kind === "trigger.start" ? <p className="inspector-help">Start is a manual trigger. It emits a flow signal; it does not hold user text.</p> : null}{isInput ? <PropertyRow label="Value"><TextField aria-label="Node input value" value={inputValue} placeholder={node.kind === "input.file" ? "Workspace file path" : "Enter text for this run"} onChange={(event) => updateConfig({ inputValue: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "file.read_text" ? <PropertyRow label="Relative path"><TextField aria-label="Workspace-relative file path" value={filePath} placeholder="src/main/java/App.java" onChange={(event) => updateConfig({ path: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "task.manual" ? <PropertyRow label="Instruction"><TextField aria-label="Node instruction" value={instruction} placeholder="Describe what this task should review or produce" onChange={(event) => updateConfig({ instruction: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow> : null}{node.kind === "agent.analyze" ? <><PropertyRow label="Endpoint"><TextField aria-label="Agent endpoint" value={agentEndpoint} placeholder="https://api.example.com/v1" onChange={(event) => updateConfig({ provider: "openai_compatible", endpoint: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Model"><TextField aria-label="Agent model" value={agentModel} placeholder="gpt-4o-mini" onChange={(event) => updateConfig({ model: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Instructions"><TextField aria-label="Agent instructions" value={agentInstructions} placeholder="Explain findings with evidence." onChange={(event) => updateConfig({ instructions: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)} /></PropertyRow><PropertyRow label="Environment"><label className="form-select form-select--compact"><select aria-label="Agent execution environment" value={agentEnvironment} onChange={(event) => updateConfig({ environment: event.target.value })} onBlur={() => onFlushNodeConfig?.(node.id)}><option>Response only</option><option>Local Restricted (planned tools)</option><option>Workspace Read/Write (planned tools)</option></select></label></PropertyRow><p className="inspector-help">The API key is resolved from Windows Credential Manager and is never stored in this graph.</p></> : null}</InspectorSection>
       <InspectorSection title="Execution"><PropertyRow label="Canvas"><span className="value-select">{canvas?.name ?? "Unknown"}</span></PropertyRow><Switch label="Repair on failure" description="Allow structured repair proposals for this node." defaultChecked /></InspectorSection>
       <InspectorSection title="Ports" action={onAddPort ? <IconButton label="Add port" size="small" onClick={onAddPort}><Plus /></IconButton> : undefined}>{node.ports.map((port) => <div className="port-row" key={port.id}><span className={`port-direction is-${port.direction}`} aria-hidden="true">{port.direction === "input" ? <ArrowDownToLine /> : <ArrowUpFromLine />}</span><span>{port.name}</span><code>{port.direction} · {port.kind}</code></div>)}{!node.ports.length ? <span className="inspector-muted">No ports configured.</span> : null}</InspectorSection>
       {onDeleteNode ? <div className="inspector-danger-action"><Button variant="danger" leadingIcon={<Trash2 />} onClick={onDeleteNode}>Delete node</Button></div> : null}
@@ -1893,15 +1969,15 @@ function SurfacePage({ surface, workspaceName, settings, onSettingsChange, agent
     agents: { eyebrow: "Delegated work", title: "Agents", description: "Manage agents that can propose structured work.", icon: <Bot /> },
   };
   const item = config[surface];
-  return <div className="surface-page"><SurfaceHeader {...item} action={surface === "automations" ? <Button variant="primary" leadingIcon={<Plus />} disabled title="Scheduler API is not available in this MVP">New Automation</Button> : undefined} /><SurfaceSection title={surface === "automations" ? "Schedules" : surface === "extensions" ? "Extension catalog" : surface === "files" ? "Recent files" : surface === "environments" ? "Execution profiles" : "Workspace agents"} description="Only operations backed by the local Host are enabled in this MVP."><SurfaceContent surface={surface} onNotice={onNotice} /></SurfaceSection></div>;
+  return <div className="surface-page"><SurfaceHeader {...item} action={surface === "automations" ? <Button variant="primary" leadingIcon={<Plus />} disabled title="Scheduler API is not available in this MVP">New Automation</Button> : undefined} /><SurfaceSection title={surface === "automations" ? "Schedules" : surface === "extensions" ? "Extension catalog" : surface === "files" ? "Recent files" : surface === "environments" ? "Execution profiles" : "Workspace agents"} description="Only operations backed by the local Host are enabled in this MVP."><SurfaceContent surface={surface} agentConfigured={agentKeyConfigured && Boolean(agentSettings.endpoint.trim()) && Boolean(agentSettings.model.trim())} onNotice={onNotice} /></SurfaceSection></div>;
 }
 
-function SurfaceContent({ surface, onNotice }: { surface: Exclude<Surface, "canvas" | "settings">; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
+function SurfaceContent({ surface, agentConfigured, onNotice }: { surface: Exclude<Surface, "canvas" | "settings">; agentConfigured: boolean; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
   if (surface === "automations") return <div className="automation-list"><article className="automation-row"><div className="automation-row__icon"><CalendarClock /></div><div className="automation-row__main"><div className="automation-row__title"><strong>Scheduler API</strong><StatusBadge tone="neutral">Unavailable</StatusBadge></div><span>Automation persistence and execution are not part of this MVP.</span><small>Use the canvas Run action for a real local Host run.</small></div><div className="automation-row__controls"><Switch label="" aria-label="Scheduler unavailable" disabled /><Menu label="Automation actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Run now", icon: <Play />, disabled: true, onSelect: () => undefined }, { label: "Edit", icon: <Pencil />, disabled: true, onSelect: () => undefined }]} /></div></article></div>;
   if (surface === "extensions") return <div className="extension-grid"><article className="extension-card is-installed"><div className="extension-card__top"><div className="extension-card__icon"><Code2 /></div><div className="extension-card__heading"><strong>Local Restricted Runtime</strong><span>Seekwd · v0.1</span></div><StatusBadge tone="success" dot>Host active</StatusBadge></div><p>Current MVP policy: read-only workspace boundary, no network, cancellable Host process.</p><div className="extension-card__footer"><Switch label="" aria-label="Runtime is managed by Host" checked disabled /><div className="extension-card__actions"><Button size="small" disabled title="Permission management API is not available in this MVP">View permissions</Button><Menu label="Extension actions" icon={<MoreHorizontal />} iconOnly items={[{ label: "Open documentation", icon: <ExternalLink />, disabled: true, onSelect: () => undefined }, { label: "Uninstall", icon: <Trash2 />, disabled: true, onSelect: () => undefined }]} /></div></div></article></div>;
   if (surface === "files") return <div className="file-list">{["research-notes.md", "citation-review.json", "experiment-report.md", "sources.bib"].map((file, index) => <div className="file-list__row" key={file}><FileCode2 /><span><strong>{file}</strong><small>{index % 2 ? "Generated artifact" : "Workspace file"} · Host file API not connected</small></span><StatusBadge tone="neutral">Read-only</StatusBadge></div>)}</div>;
   if (surface === "environments") return <div className="environment-list"><div className="environment-list__row is-selected"><div><strong>Local Restricted</strong><span>Read-only workspace · no network · cancellable</span></div><StatusBadge tone="success" dot>Active</StatusBadge></div><div className="environment-list__row"><div><strong>Docker Sandbox</strong><span>Requires a sandbox worker that is not installed.</span></div><StatusBadge tone="neutral">Unavailable</StatusBadge></div></div>;
-  return <div className="agent-list"><div className="agent-row"><div className="agent-avatar"><Bot /></div><div><strong>Agent Runtime</strong><span>Natural-language graph changes are not connected in this MVP.</span><small>Use node, port, edge, revision and Run actions directly.</small></div><Switch label="" aria-label="Agent runtime unavailable" disabled /></div></div>;
+  return <div className="agent-list"><div className="agent-row"><div className="agent-avatar"><Bot /></div><div><strong>Agent Analyze Runtime</strong><span>{agentConfigured ? "Configured model requests execute as frozen canvas nodes." : "Configure an endpoint, model, and API key in Settings."}</span><small>Only connected Goal and Context values are sent to the provider. File and shell access require separate capability nodes.</small></div><StatusBadge tone={agentConfigured ? "success" : "neutral"} dot>{agentConfigured ? "Ready" : "Needs setup"}</StatusBadge></div></div>;
 }
 
 function SettingsPage({ settings, onChange, agentSettings, agentKeyConfigured, onAgentSettingsChange, onAgentKeyConfigured, onDefaultProjectParentChange, onNotice }: { settings: SettingsState; onChange: (key: keyof SettingsState, value: boolean) => void; agentSettings: AgentSettings; agentKeyConfigured: boolean; onAgentSettingsChange: (key: keyof AgentSettings, value: string) => void; onAgentKeyConfigured: (configured: boolean) => void; onDefaultProjectParentChange: (path: string) => void; onNotice: (title: string, message: string, severity?: Notice["severity"]) => void }) {
@@ -1943,7 +2019,7 @@ function SettingsPage({ settings, onChange, agentSettings, agentKeyConfigured, o
       setTestingAgent(false);
     }
   };
-  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><div className="settings-path-row"><div><strong>Default project folder</strong><p>{settings.defaultProjectParent || "User home folder / SeekwdProjects"}</p><small>New projects use this folder unless you choose another location.</small></div><div className="settings-path-actions"><Button size="small" leadingIcon={<FolderOpen />} onClick={() => void chooseDefaultProjectParent()}>Choose folder</Button><Button size="small" onClick={() => onDefaultProjectParentChange("")} disabled={!settings.defaultProjectParent}>Reset</Button></div></div><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection><SurfaceSection title="Agent provider" description="Connect a local OpenAI-compatible Agent endpoint. API keys stay in the Windows Credential Manager."><div className="agent-settings-grid"><TextField label="Agent name" value={agentSettings.name} onChange={(event) => onAgentSettingsChange("name", event.target.value)} placeholder="Local Agent" /><TextField label="Endpoint" value={agentSettings.endpoint} onChange={(event) => onAgentSettingsChange("endpoint", event.target.value)} placeholder="https://api.example.com/v1" /><TextField label="Model" value={agentSettings.model} onChange={(event) => onAgentSettingsChange("model", event.target.value)} placeholder="gpt-4o-mini" /><TextField label="API key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={agentKeyConfigured ? "Saved in Windows Credential Manager" : "Enter API key"} description={agentKeyConfigured ? "A key is configured. Enter a new key to replace it, or clear and save to remove it." : "The key is never stored in browser storage or project files."} /></div><TextField label="Agent instructions" value={agentSettings.instructions} onChange={(event) => onAgentSettingsChange("instructions", event.target.value)} placeholder="Describe the response style or project conventions." /><label className="form-select"><span>Execution environment</span><select value={agentSettings.environment} onChange={(event) => onAgentSettingsChange("environment", event.target.value)}><option>Response only</option><option>Local Restricted (planned tools)</option><option>Workspace Read/Write (planned tools)</option></select></label><p className="settings-inline-note">The current connection can chat and propose work. File, shell and graph-editing tools are not granted yet.</p><div className="agent-settings-actions"><StatusBadge tone={agentKeyConfigured ? "success" : "neutral"} dot>{agentKeyConfigured ? "API key configured" : "API key not configured"}</StatusBadge><span className="agent-settings-spacer" /><Button size="small" onClick={() => void saveApiKey()} disabled={savingApiKey}>{savingApiKey ? "Saving..." : "Save key"}</Button><Button size="small" onClick={() => void testAgent()} disabled={testingAgent || !agentKeyConfigured || !agentSettings.endpoint.trim() || !agentSettings.model.trim()}>{testingAgent ? "Testing..." : "Test connection"}</Button></div></SurfaceSection></div></div></div>;
+  return <div className="settings-page"><SurfaceHeader eyebrow="Application preferences" title="Settings" description="Control how Seekwd looks, runs and reports work." icon={<Settings />} /><div className="settings-layout"><nav className="settings-nav" aria-label="Settings sections"><button type="button" className="is-active"><SlidersHorizontal /><span>General</span><ChevronRight /></button><button type="button"><Bell /><span>Notifications</span><ChevronRight /></button><button type="button"><ShieldCheck /><span>Execution</span><ChevronRight /></button><button type="button"><KeyRound /><span>Privacy</span><ChevronRight /></button></nav><div className="settings-content"><SurfaceSection title="General" description="Appearance and local execution preferences."><div className="settings-path-row"><div><strong>Default project folder</strong><p>{settings.defaultProjectParent || "User home folder / SeekwdProjects"}</p><small>New projects use this folder unless you choose another location.</small></div><div className="settings-path-actions"><Button size="small" leadingIcon={<FolderOpen />} onClick={() => void chooseDefaultProjectParent()}>Choose folder</Button><Button size="small" onClick={() => onDefaultProjectParentChange("")} disabled={!settings.defaultProjectParent}>Reset</Button></div></div><Switch label="Compact sidebar" description="Use tighter navigation rows when you work with many canvases." checked={settings.compactSidebar} onChange={(event) => onChange("compactSidebar", event.target.checked)} /><Switch label="Reduce motion" description="Prefer immediate transitions and fewer animated indicators." checked={settings.reduceMotion} onChange={(event) => onChange("reduceMotion", event.target.checked)} /><Switch label="Successful run notifications" description="Show a notification when a canvas finishes successfully." checked={settings.notifySuccess} onChange={(event) => onChange("notifySuccess", event.target.checked)} /><Switch label="Failed run notifications" description="Show a notification when a run needs attention." checked={settings.notifyFailure} onChange={(event) => onChange("notifyFailure", event.target.checked)} /><Switch label="Allow background runs" description="Keep approved runs active after the window is closed." checked={settings.allowBackgroundRuns} onChange={(event) => onChange("allowBackgroundRuns", event.target.checked)} /><Switch label="Confirm destructive actions" description="Ask before deleting workspaces, canvases or artifacts." checked={settings.confirmDestructive} onChange={(event) => onChange("confirmDestructive", event.target.checked)} /></SurfaceSection><SurfaceSection title="Agent provider" description="Connect an OpenAI-compatible Agent endpoint. API keys stay in the Windows Credential Manager."><div className="agent-settings-grid"><TextField label="Agent name" value={agentSettings.name} onChange={(event) => onAgentSettingsChange("name", event.target.value)} placeholder="Local Agent" /><TextField label="Endpoint" value={agentSettings.endpoint} onChange={(event) => onAgentSettingsChange("endpoint", event.target.value)} placeholder="https://api.example.com/v1" /><TextField label="Model" value={agentSettings.model} onChange={(event) => onAgentSettingsChange("model", event.target.value)} placeholder="gpt-4o-mini" /><TextField label="API key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={agentKeyConfigured ? "Saved in Windows Credential Manager" : "Enter API key"} description={agentKeyConfigured ? "A key is configured. Enter a new key to replace it, or clear and save to remove it." : "The key is never stored in browser storage or project files."} /></div><TextField label="Agent instructions" value={agentSettings.instructions} onChange={(event) => onAgentSettingsChange("instructions", event.target.value)} placeholder="Describe the response style or project conventions." /><label className="form-select"><span>Execution environment</span><select value={agentSettings.environment} onChange={(event) => onAgentSettingsChange("environment", event.target.value)}><option>Response only</option><option>Local Restricted (planned tools)</option><option>Workspace Read/Write (planned tools)</option></select></label><p className="settings-inline-note">Model requests now execute as Agent Analyze canvas nodes. File, shell and graph-editing tools are not granted implicitly.</p><div className="agent-settings-actions"><StatusBadge tone={agentKeyConfigured ? "success" : "neutral"} dot>{agentKeyConfigured ? "API key configured" : "API key not configured"}</StatusBadge><span className="agent-settings-spacer" /><Button size="small" onClick={() => void saveApiKey()} disabled={savingApiKey}>{savingApiKey ? "Saving..." : "Save key"}</Button><Button size="small" onClick={() => void testAgent()} disabled={testingAgent || !agentKeyConfigured || !agentSettings.endpoint.trim() || !agentSettings.model.trim()}>{testingAgent ? "Testing..." : "Test connection"}</Button></div></SurfaceSection></div></div></div>;
 }
 
 function SurfaceHeader({ eyebrow, title, description, icon, action }: { eyebrow: string; title: string; description: string; icon: ReactNode; action?: ReactNode }) {
@@ -1965,7 +2041,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!runtimeValidation.valid) {
     return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
   }
-  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze", "file.read_text"]);
+  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze", "file.read_text", "agent.analyze"]);
   const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
   if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -2025,10 +2101,22 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       };
     }
   }
+  for (const agent of nodes.filter((node) => node.kind === "agent.analyze")) {
+    const goalPort = agent.ports.find((port) => port.name === "Goal" && port.direction === "input");
+    const goalEdge = edges.find((edge) => edge.targetPortId === goalPort?.id);
+    const endpoint = typeof agent.config?.endpoint === "string" ? agent.config.endpoint.trim() : "";
+    const model = typeof agent.config?.model === "string" ? agent.config.model.trim() : "";
+    if (!goalPort || !goalEdge) {
+      return { valid: false, message: `Connect an explicit goal to ${agent.name}.Goal before running.` };
+    }
+    if (!endpoint || !model) {
+      return { valid: false, message: `Configure the endpoint and model on ${agent.name} before running.` };
+    }
+  }
   for (const output of nodes.filter((node) => node.kind === "output.text")) {
     const input = output.ports.find((port) => port.name === "Input" && port.direction === "input");
     const dataEdge = edges.find((edge) => edge.targetPortId === input?.id);
-    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input, Workspace Scan, Project Analyze, or Read Text File node to ${output.name}.Input before running.` };
+    if (!input || !dataEdge) return { valid: false, message: `Connect a value-producing node to ${output.name}.Input before running.` };
     const source = nodeById.get(dataEdge.sourceNodeId);
     if (source?.kind === "input.text") {
       const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
@@ -2038,8 +2126,8 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       if (!value && source.id !== canvas.defaultEntrypointNodeId) {
         return { valid: false, message: `Set a value on ${source.name} before running, or make it the canvas entrypoint.` };
       }
-    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze" && source?.kind !== "file.read_text") {
-      return { valid: false, message: `${output.name} accepts Text Input, Workspace Scan, Project Analyze, or Read Text File nodes.` };
+    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze" && source?.kind !== "file.read_text" && source?.kind !== "agent.analyze") {
+      return { valid: false, message: `${output.name} requires a connected runtime value source.` };
     }
   }
   return { valid: true, message: "Canvas is ready to run." };
@@ -2053,7 +2141,7 @@ function nodeDefinition(node: WireNode) {
   const inputs = node.ports.filter((port) => port.direction === "input").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const outputs = node.ports.filter((port) => port.direction === "output").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind === "workspace.analyze" ? <FileSearch /> : node.kind === "file.read_text" ? <FileText /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
-  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind === "file.read_text" ? "Text file reader" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
+  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind === "file.read_text" ? "Text file reader" : node.kind === "agent.analyze" ? "Agent analysis" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
   const description = node.kind === "trigger.start"
     ? "Manual entrypoint. Starting the canvas emits a flow signal from this node."
     : node.kind === "input.text"
@@ -2072,6 +2160,8 @@ function nodeDefinition(node: WireNode) {
                 ? "Read-only structural project analysis. It inspects manifests, file types, tests, and likely entrypoints inside the selected workspace."
               : node.kind === "file.read_text"
                 ? "Read one UTF-8 text file by workspace-relative path. Absolute paths, parent traversal, symbolic links, and files over the configured limit are rejected."
+              : node.kind === "agent.analyze"
+                ? "Model-backed analysis. Goal and Context come only from connected data ports; the node has no implicit file, shell, or network capability beyond its configured provider request."
               : node.kind === "output.text"
                 ? "Text output. It displays a value received from a connected Text Input node in Run Output."
               : "Agent task. This node requires an Agent Runtime capability before it can execute.";
@@ -2085,6 +2175,7 @@ function nodeKindForName(name: string) {
   if (name === "Workspace Scan") return "workspace.scan";
   if (name === "Project Analyze") return "workspace.analyze";
   if (name === "Read Text File") return "file.read_text";
+  if (name === "Agent Analyze") return "agent.analyze";
   if (name === "Review sources") return "task.manual";
   if (name === "Human Approval") return "control.approval";
   if (name === "Event Trigger") return "trigger.event";

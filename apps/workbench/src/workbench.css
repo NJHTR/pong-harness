@@ -190,6 +190,7 @@ button, input, textarea { font-family: inherit; }
 .port-form { display: grid; gap: 12px; }
 .form-select { display: grid; gap: 5px; color: var(--sk-text-secondary); font-size: 11px; }
 .form-select select { min-height: 30px; padding: 0 8px; border: 1px solid var(--sk-border); border-radius: 6px; color: var(--sk-text-primary); background: var(--sk-bg-elevated); }
+.form-select--compact { width: 100%; }
 .port-direction { width: 17px; height: 17px; display: grid; place-items: center; }
 .port-direction svg { width: 13px; height: 13px; }
 .port-direction.is-input { color: var(--sk-accent); }

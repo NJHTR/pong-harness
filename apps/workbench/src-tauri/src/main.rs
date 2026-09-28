@@ -115,27 +115,6 @@ async fn test_agent_provider(endpoint: String, model: String) -> Result<String, 
     seekwd_agent_provider::test_openai_compatible(&endpoint, &model).await
 }
 
-#[tauri::command]
-async fn run_agent_prompt(
-    endpoint: String,
-    model: String,
-    prompt: String,
-    workspace_name: String,
-    environment: String,
-    instructions: String,
-) -> Result<String, String> {
-    seekwd_agent_provider::run_openai_compatible(seekwd_agent_provider::AgentRequest {
-        endpoint: &endpoint,
-        model: &model,
-        prompt: &prompt,
-        workspace_name: &workspace_name,
-        environment: &environment,
-        instructions: &instructions,
-        context: None,
-    })
-    .await
-}
-
 fn host_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
@@ -234,8 +213,7 @@ fn main() {
             create_project_directory,
             has_agent_api_key,
             save_agent_api_key,
-            test_agent_provider,
-            run_agent_prompt
+            test_agent_provider
         ])
         .setup(|app| {
             let token = host_token();

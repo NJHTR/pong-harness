@@ -81,7 +81,7 @@ export function toRuntimeGraphDocument(canvas: Canvas, nodes: CanvasNode[], edge
         direction: "input" as const,
         kind: runtimePortKind(port.kind),
         valueType: port.kind === "data" ? "any" : port.kind === "resource" ? "artifact" : port.kind === "event" ? "event" : "any",
-        required: true,
+        required: !(node.kind === "agent.analyze" && port.name === "Context"),
         cardinality: "one" as const,
       })),
       outputs: node.ports.filter((port) => port.direction === "output").map((port) => ({
@@ -129,6 +129,7 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "workspace.scan") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   if (kind === "workspace.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Request", "input", "data"), port(nodeId, "Report", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   if (kind === "file.read_text") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Path", "input", "data"), port(nodeId, "Content", "output", "data"), port(nodeId, "Complete", "output", "flow")];
+  if (kind === "agent.analyze") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Goal", "input", "data"), port(nodeId, "Context", "input", "data"), port(nodeId, "Result", "output", "data"), port(nodeId, "Complete", "output", "flow")];
   return [port(nodeId, "Input", "input", "data"), port(nodeId, "Start", "input", "flow"), port(nodeId, "Result", "output", "data"), port(nodeId, "Artifact", "output", "resource"), port(nodeId, "Complete", "output", "event")];
 };
 const valueOutputPort = (node: CanvasNode | undefined) => {
@@ -141,6 +142,8 @@ const valueOutputPort = (node: CanvasNode | undefined) => {
         ? "Result"
         : node.kind === "workspace.analyze"
           ? "Report"
+          : node.kind === "agent.analyze"
+            ? "Result"
           : "Result";
   return node.ports.find((candidate) => candidate.direction === "output" && (candidate.kind === "data" || candidate.kind === "resource") && candidate.name === preferred)
     ?? node.ports.find((candidate) => candidate.direction === "output" && (candidate.kind === "data" || candidate.kind === "resource"));
