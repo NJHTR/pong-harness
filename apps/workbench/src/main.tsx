@@ -19,6 +19,7 @@ import {
   Database,
   ExternalLink,
   FileCode2,
+  FileSearch,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -647,6 +648,66 @@ function App() {
     }
   };
 
+  const createProjectAnalysisWorkflow = async (request: string) => {
+    if (!activeWorkspace) {
+      showNotice("Choose a workspace", "Open the local project folder you want to analyze first.", "warning");
+      return;
+    }
+    try {
+      const canvas = activeCanvas && canvasNodes.length === 0
+        ? activeCanvas
+        : await client.createCanvas({ workspaceId: activeWorkspace.id, name: "Project Analysis" });
+      const input = await client.createNode({ canvasId: canvas.id, name: "Analysis Request", kind: "input.text" });
+      const analyze = await client.createNode({ canvasId: canvas.id, name: "Project Analyze", kind: "workspace.analyze" });
+      const output = await client.createNode({ canvasId: canvas.id, name: "Analysis Report", kind: "output.text" });
+      await client.updateNode({ nodeId: input.id, config: { inputValue: request, position: { x: 70, y: 170 } } });
+      await client.updateNode({ nodeId: analyze.id, config: { maxEntries: 5000, maxDepth: 16, position: { x: 390, y: 170 } } });
+      await client.updateNode({ nodeId: output.id, config: { position: { x: 730, y: 170 } } });
+
+      const connect = async (
+        source: WireNode,
+        sourcePortName: string,
+        target: WireNode,
+        targetPortName: string,
+        kind: PortKind,
+      ) => {
+        const sourcePort = source.ports.find((port) => port.name === sourcePortName && port.direction === "output");
+        const targetPort = target.ports.find((port) => port.name === targetPortName && port.direction === "input");
+        if (!sourcePort || !targetPort) throw new Error(`Missing ${sourcePortName} → ${targetPortName} ports`);
+        await client.createEdge({
+          canvasId: canvas.id,
+          sourceNodeId: source.id,
+          sourcePortId: sourcePort.id,
+          targetNodeId: target.id,
+          targetPortId: targetPort.id,
+          kind,
+        });
+      };
+      await connect(input, "Text", analyze, "Request", "data");
+      await connect(input, "Complete", analyze, "Start", "flow");
+      await connect(analyze, "Report", output, "Input", "data");
+      await connect(analyze, "Complete", output, "Start", "flow");
+      await client.setDefaultEntrypoint(canvas.id, input.id);
+      const revision = await client.saveRevision(canvas.id);
+      await client.startRun({
+        canvasId: canvas.id,
+        revision: revision.revision,
+        entrypoint: "default",
+        entrypointId: `${canvas.id}:default`,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setWorkspaceId(activeWorkspace.id);
+      setCanvasId(canvas.id);
+      setOpenCanvasIds((current) => current.includes(canvas.id) ? current : [...current, canvas.id]);
+      setSelectedNodeId(input.id);
+      setRunPanelOpen(true);
+      setSurface("canvas");
+      showNotice("Project analysis started", `${canvas.name} is inspecting ${activeWorkspace.name} through the local restricted Host.`, "info");
+    } catch (error) {
+      reportError(error, "Unable to create the project analysis workflow");
+    }
+  };
+
   const runCanvas = async (composerValue?: string) => {
     if (!activeCanvas) return;
     const normalizedComposerValue = composerValue?.trim();
@@ -707,23 +768,6 @@ function App() {
   const submitComposerRequest = async (value: string) => {
     const normalizedValue = value.trim();
     if (!normalizedValue) return;
-    if (agentKeyConfigured && agentSettings.endpoint.trim() && agentSettings.model.trim()) {
-      try {
-        const response = await invoke<string>("run_agent_prompt", {
-          endpoint: agentSettings.endpoint,
-          model: agentSettings.model,
-         prompt: normalizedValue,
-         workspaceName: activeWorkspace?.name ?? "Workspace",
-         environment: agentSettings.environment,
-          instructions: agentSettings.instructions,
-        });
-        setAgentResponse(response);
-        showNotice("Agent response received", `${agentSettings.name} returned a response.`, "success");
-      } catch (error) {
-        reportError(error, "Unable to run Agent request");
-      }
-      return;
-    }
     if (activeRun?.status === "waiting_input") {
       try {
         await client.submitRunInput({ runId: activeRun.id, value: normalizedValue });
@@ -735,6 +779,33 @@ function App() {
     }
     if (activeRun?.status === "running" || activeRun?.status === "queued") {
       showNotice("Run already active", "Wait for the current canvas run to finish before sending another value.", "warning");
+      return;
+    }
+    const hasProjectAnalysisGraph = canvasNodes.some((node) => node.kind === "workspace.analyze")
+      && canvasNodes.some((node) => node.kind === "input.text");
+    if (isProjectAnalysisRequest(normalizedValue) && !hasProjectAnalysisGraph) {
+      await createProjectAnalysisWorkflow(normalizedValue);
+      return;
+    }
+    if (activeCanvas?.defaultEntrypointNodeId && canvasNodes.some((node) => node.kind === "input.text")) {
+      await runCanvas(normalizedValue);
+      return;
+    }
+    if (agentKeyConfigured && agentSettings.endpoint.trim() && agentSettings.model.trim()) {
+      try {
+        const response = await invoke<string>("run_agent_prompt", {
+          endpoint: agentSettings.endpoint,
+          model: agentSettings.model,
+          prompt: normalizedValue,
+          workspaceName: activeWorkspace?.name ?? "Workspace",
+          environment: agentSettings.environment,
+          instructions: agentSettings.instructions,
+        });
+        setAgentResponse(response);
+        showNotice("Agent response received", `${agentSettings.name} returned a response.`, "success");
+      } catch (error) {
+        reportError(error, "Unable to run Agent request");
+      }
       return;
     }
     await runCanvas(normalizedValue);
@@ -1663,6 +1734,7 @@ function NodeLibrary({ onAdd, onClose }: { onAdd: (name: string) => void; onClos
     { name: "Text Output", category: "Output", description: "Display a connected text value", icon: <ArrowUpFromLine />, available: true },
     { name: "Review sources", category: "Human task", description: "Review connected sources and submit a result", icon: <Type />, available: true },
     { name: "Workspace Scan", category: "Workspace", description: "List files and directories in the selected workspace", icon: <FolderOpen />, available: true },
+    { name: "Project Analyze", category: "Workspace", description: "Inspect project structure, manifests, languages, tests, and entrypoints", icon: <FileSearch />, available: true },
     { name: "File Input", category: "Input", description: "Read a workspace artifact", icon: <FolderOpen />, available: false },
     { name: "Human Approval", category: "Control", description: "Preview: approval executor is not installed", icon: <Pause />, available: false },
     { name: "Event Trigger", category: "Trigger", description: "Preview: event delivery is not installed", icon: <Zap />, available: false },
@@ -1807,7 +1879,7 @@ function RunPanel({ run, canvas, nodes, value, onValueChange, onSubmit }: { run?
   return (
     <div className={`run-panel ${run?.status === "waiting_input" ? "is-waiting" : ""}`}>
       <PanelHeader title="Run output" trailing={<Toolbar><span className="run-context-label">{canvas?.name ?? "No canvas"}</span><StatusBadge tone={status === "success" ? "success" : status === "error" ? "danger" : status === "waiting" ? "warning" : "info"} dot>{run?.status ?? "No run"}</StatusBadge><IconButton label="Run actions" size="small"><MoreHorizontal /></IconButton></Toolbar>} />
-      <div className="run-content"><div className="run-tabs"><button className="is-active">Run</button><button disabled>Logs</button><button disabled>Issues</button></div><div className="run-events">{run ? <><p className="run-disclosure">{run.status === "waiting_input" ? "The local Host reached the next interactive node. Submit its result to continue." : "This run is executed by the local Host. Text Input and Text Output are supported locally."}</p>{run.status === "waiting_input" ? <div className="run-input-card"><strong>{currentNode?.name ?? "Input required"}</strong><span>{run.inputPrompt ?? "Enter a result for the current node."}</span><AutoGrowTextArea aria-label="Node result" maxHeight={120} value={value} onChange={(event) => onValueChange(event.target.value)} placeholder="Enter the result or decision..." /><Button variant="primary" leadingIcon={<ArrowUp />} onClick={onSubmit} disabled={!value.trim()}>Submit result</Button></div> : null}{run.status === "succeeded" && run.result ? <div className="run-result-card"><strong>Output</strong><pre>{run.result}</pre></div> : null}{run.status === "failed" && run.inputPrompt ? <div className="run-error-card"><strong>Run failed</strong><span>{run.inputPrompt}</span></div> : null}<dl className="run-details"><div><dt>Run ID</dt><dd>{run.id}</dd></div><div><dt>Canvas</dt><dd>{canvas?.name ?? "Unknown"}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>Current node</dt><dd>{currentNode?.name ?? (run.status === "succeeded" ? "Completed" : "Preparing")}</dd></div><div><dt>Started</dt><dd>{new Date(run.startedAt).toLocaleString()}</dd></div><div><dt>Finished</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : "In progress"}</dd></div></dl></> : <p className="run-empty">No Host run has been started.</p>}</div></div>
+      <div className="run-content"><div className="run-tabs"><button className="is-active">Run</button><button disabled>Logs</button><button disabled>Issues</button></div><div className="run-events">{run ? <><p className="run-disclosure">{run.status === "waiting_input" ? "The local Host reached the next interactive node. Submit its value to continue the graph." : "This run is executed by the local restricted Host. Runtime input, text output, workspace scan, and structural project analysis are supported."}</p>{run.status === "waiting_input" ? <div className="run-input-card"><strong>{currentNode?.name ?? "Input required"}</strong><span>{run.inputPrompt ?? "Enter a result for the current node."}</span><AutoGrowTextArea aria-label="Node result" maxHeight={120} value={value} onChange={(event) => onValueChange(event.target.value)} placeholder="Enter the value or decision..." /><Button variant="primary" leadingIcon={<ArrowUp />} onClick={onSubmit} disabled={!value.trim()}>Submit value</Button></div> : null}{run.status === "succeeded" && run.result ? <div className="run-result-card"><strong>Output</strong><pre>{run.result}</pre></div> : null}{run.status === "failed" && run.inputPrompt ? <div className="run-error-card"><strong>Run failed</strong><span>{run.inputPrompt}</span></div> : null}<dl className="run-details"><div><dt>Run ID</dt><dd>{run.id}</dd></div><div><dt>Canvas</dt><dd>{canvas?.name ?? "Unknown"}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>Current node</dt><dd>{currentNode?.name ?? (run.status === "succeeded" ? "Completed" : "Preparing")}</dd></div><div><dt>Started</dt><dd>{new Date(run.startedAt).toLocaleString()}</dd></div><div><dt>Finished</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : "In progress"}</dd></div></dl></> : <p className="run-empty">No Host run has been started.</p>}</div></div>
     </div>
   );
 }
@@ -1894,7 +1966,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!runtimeValidation.valid) {
     return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
   }
-  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan"]);
+  const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text", "workspace.scan", "workspace.analyze"]);
   const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
   if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -1930,7 +2002,7 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   for (const output of nodes.filter((node) => node.kind === "output.text")) {
     const input = output.ports.find((port) => port.name === "Input" && port.direction === "input");
     const dataEdge = edges.find((edge) => edge.targetPortId === input?.id);
-    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input or Workspace Scan to ${output.name}.Input before running.` };
+    if (!input || !dataEdge) return { valid: false, message: `Connect a Text Input, Workspace Scan, or Project Analyze node to ${output.name}.Input before running.` };
     const source = nodeById.get(dataEdge.sourceNodeId);
     if (source?.kind === "input.text") {
       const value = typeof source.config?.inputValue === "string" ? source.config.inputValue.trim() : "";
@@ -1940,8 +2012,8 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
       if (!value && source.id !== canvas.defaultEntrypointNodeId) {
         return { valid: false, message: `Set a value on ${source.name} before running, or make it the canvas entrypoint.` };
       }
-    } else if (source?.kind !== "workspace.scan") {
-      return { valid: false, message: `${output.name} accepts Text Input or Workspace Scan nodes.` };
+    } else if (source?.kind !== "workspace.scan" && source?.kind !== "workspace.analyze") {
+      return { valid: false, message: `${output.name} accepts Text Input, Workspace Scan, or Project Analyze nodes.` };
     }
   }
   return { valid: true, message: "Canvas is ready to run." };
@@ -1954,8 +2026,8 @@ function isPassiveSourceNode(node: WireNode) {
 function nodeDefinition(node: WireNode) {
   const inputs = node.ports.filter((port) => port.direction === "input").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
   const outputs = node.ports.filter((port) => port.direction === "output").map((port) => ({ id: port.id, label: port.name, kind: port.kind }));
-  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
-  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
+  const icon = node.kind === "trigger.start" ? <CirclePlay /> : node.kind === "workspace.analyze" ? <FileSearch /> : node.kind.includes("file") ? <FolderOpen /> : node.kind.includes("approval") ? <Pause /> : node.kind.includes("event") ? <Zap /> : node.kind === "task.manual" ? <Type /> : node.kind === "output.text" ? <ArrowUpFromLine /> : <Bot />;
+  const typeLabel = node.kind === "trigger.start" ? "Canvas entry" : node.kind === "task.manual" ? "Task" : node.kind === "input.text" ? "Text input" : node.kind === "output.text" ? "Text output" : node.kind === "workspace.scan" ? "Workspace scan" : node.kind === "workspace.analyze" ? "Project analysis" : node.kind.includes("file") ? "File input" : node.kind.includes("approval") ? "Human input" : node.kind.includes("event") ? "Event trigger" : "Agent task";
   const description = node.kind === "trigger.start"
     ? "Manual entrypoint. Starting the canvas emits a flow signal from this node."
     : node.kind === "input.text"
@@ -1970,6 +2042,8 @@ function nodeDefinition(node: WireNode) {
               ? "Manual review task. It receives connected inputs and waits for a human result; it does not call an Agent by itself."
               : node.kind === "workspace.scan"
                 ? "Read-only workspace inventory. It lists files and directories without reading file contents."
+              : node.kind === "workspace.analyze"
+                ? "Read-only structural project analysis. It inspects manifests, file types, tests, and likely entrypoints inside the selected workspace."
               : node.kind === "output.text"
                 ? "Text output. It displays a value received from a connected Text Input node in Run Output."
               : "Agent task. This node requires an Agent Runtime capability before it can execute.";
@@ -1981,6 +2055,7 @@ function nodeKindForName(name: string) {
   if (name === "Text Output") return "output.text";
   if (name === "File Input") return "input.file";
   if (name === "Workspace Scan") return "workspace.scan";
+  if (name === "Project Analyze") return "workspace.analyze";
   if (name === "Review sources") return "task.manual";
   if (name === "Human Approval") return "control.approval";
   if (name === "Event Trigger") return "trigger.event";
@@ -2007,6 +2082,14 @@ function aggregateState(states: RuntimeState[]): RuntimeState {
 
 function stateLabel(state: RuntimeState) {
   return { idle: "Ready", running: "Running", waiting: "Waiting", success: "Completed", error: "Failed" }[state];
+}
+
+function isProjectAnalysisRequest(value: string) {
+  const normalized = value.trim().toLocaleLowerCase();
+  return (
+    (normalized.includes("分析") && (normalized.includes("项目") || normalized.includes("代码")))
+    || /\b(analy[sz]e|inspect|review)\b.*\b(project|codebase|repository|repo|backend)\b/.test(normalized)
+  );
 }
 
 function surfaceTitle(surface: Surface) {
