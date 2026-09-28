@@ -46,8 +46,9 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { createHttpHostClient, createLocalHostClient } from "@seekwd/client";
+import { createHttpHostClient, createLocalHostClient, toRuntimeGraphDocument } from "@seekwd/client";
 import type { Canvas, CanvasEdge, CanvasNode as WireNode, HostSnapshot, Run, Workspace } from "@seekwd/protocol-schema";
+import { validateRuntimeGraph } from "@seekwd/protocol-schema";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
@@ -1886,6 +1887,10 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
   if (!nodes.length) return { valid: false, message: "This canvas has no nodes. Add nodes before configuring a manual entrypoint." };
   const entry = nodes.find((node) => node.id === canvas.defaultEntrypointNodeId);
   if (!entry) return { valid: false, message: "The configured entry node is missing from this canvas." };
+  const runtimeValidation = validateRuntimeGraph(toRuntimeGraphDocument(canvas, nodes, edges), "workflow");
+  if (!runtimeValidation.valid) {
+    return { valid: false, message: runtimeValidation.errors[0]?.message ?? "The graph contains an invalid connection." };
+  }
   const supportedKinds = new Set(["trigger.start", "input.text", "task.manual", "output.text"]);
   const unsupported = nodes.find((node) => !supportedKinds.has(node.kind));
   if (unsupported) return { valid: false, message: `${unsupported.name} uses ${unsupported.kind}, which is not executable in this MVP.` };
@@ -1899,12 +1904,6 @@ function validateCanvasGraphForUi(canvas: Canvas | undefined, nodes: WireNode[],
     const sourcePort = source.ports.find((port) => port.id === edge.sourcePortId);
     const targetPort = target.ports.find((port) => port.id === edge.targetPortId);
     if (!sourcePort || !targetPort) return { valid: false, message: "A connection points to a missing port." };
-    if (sourcePort.direction !== "output" || targetPort.direction !== "input") {
-      return { valid: false, message: "Connections must run from an output port to an input port." };
-    }
-    if (sourcePort.kind !== targetPort.kind || sourcePort.kind !== edge.kind) {
-      return { valid: false, message: `The ${sourcePort.name} and ${targetPort.name} port types do not match.` };
-    }
     if (edge.kind === "flow") {
       const next = adjacency.get(source.id) ?? [];
       next.push(target.id);

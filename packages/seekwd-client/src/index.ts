@@ -1,4 +1,4 @@
-import { validateRuntimeConnection, type Canvas, type CanvasEdge, type CanvasNode, type CanvasPort, type CanvasRevision, type CreateCanvasInput, type CreateEdgeInput, type CreateNodeInput, type CreatePortInput, type CreateWorkspaceInput, type HostError, type HostEventBatch, type HostSnapshot, type Id, type Notification, type Run, type RuntimeGraphPort, type StartRunInput, type SubmitRunInput, type UpdateNodeInput, type Workspace } from "@seekwd/protocol-schema";
+import { validateRuntimeConnection, type Canvas, type CanvasEdge, type CanvasNode, type CanvasPort, type CanvasRevision, type CreateCanvasInput, type CreateEdgeInput, type CreateNodeInput, type CreatePortInput, type CreateWorkspaceInput, type GraphDocument, type HostError, type HostEventBatch, type HostSnapshot, type Id, type Notification, type NodeCategory as RuntimeNodeCategory, type PortKind as RuntimePortKind, type Run, type RuntimeGraphPort, type StartRunInput, type SubmitRunInput, type UpdateNodeInput, type Workspace } from "@seekwd/protocol-schema";
 
 export interface HostClient {
   snapshot(): Promise<HostSnapshot>;
@@ -25,6 +25,7 @@ export interface HostClient {
 const key = "seekwd.vertical-slice.v1";
 const uid = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 const now = () => new Date().toISOString();
+const legacyDigest = `sha256:${"0".repeat(64)}` as `${string}:${string}`;
 const port = (nodeId: string, name: string, direction: CanvasPort["direction"], kind: CanvasPort["kind"]): CanvasPort => ({ id: uid("port"), nodeId, name, direction, kind });
 const runtimePort = (value: CanvasPort): RuntimeGraphPort => ({
   portId: value.id,
@@ -36,6 +37,87 @@ const runtimePort = (value: CanvasPort): RuntimeGraphPort => ({
   required: value.direction === "input",
   cardinality: "one",
 });
+const runtimeNodeCategory = (kind: string): RuntimeNodeCategory => {
+  if (kind.startsWith("trigger.")) return "trigger";
+  if (kind.startsWith("input.")) return "input";
+  if (kind.startsWith("output.")) return "output";
+  if (kind.startsWith("file.")) return "file";
+  if (kind.startsWith("console.")) return "console";
+  if (kind.startsWith("canvas.")) return "subcanvas";
+  if (kind.startsWith("control.")) return "approval";
+  if (kind.startsWith("agent.")) return "agent";
+  if (kind.startsWith("transform.")) return "transform";
+  return "tool";
+};
+const runtimePortKind = (kind: CanvasPort["kind"]): RuntimePortKind => kind === "flow" ? "control" : kind === "resource" ? "data" : kind;
+
+/**
+ * Convert the legacy Host snapshot graph into the canonical runtime graph.
+ * This is the migration boundary for the MVP; new Host endpoints should
+ * eventually return GraphDocument directly.
+ */
+export function toRuntimeGraphDocument(canvas: Canvas, nodes: CanvasNode[], edges: CanvasEdge[]): GraphDocument {
+  const canvasNodes = nodes.filter((node) => node.canvasId === canvas.id);
+  const canvasEdges = edges.filter((edge) => edge.canvasId === canvas.id);
+  const entrypointId = canvas.defaultEntrypointNodeId ? `${canvas.id}:default` : undefined;
+  return {
+    schemaVersion: "1.0.0",
+    nodes: canvasNodes.map((node, index) => ({
+      nodeId: node.id,
+      canvasId: node.canvasId,
+      definition: {
+        definitionId: node.kind,
+        version: "0.1.0",
+        contentDigest: legacyDigest,
+      },
+      name: node.name,
+      category: runtimeNodeCategory(node.kind),
+      config: node.config ?? {},
+      inputs: node.ports.filter((port) => port.direction === "input").map((port) => ({
+        portId: port.id,
+        nodeId: port.nodeId,
+        name: port.name,
+        direction: "input" as const,
+        kind: runtimePortKind(port.kind),
+        valueType: port.kind === "data" ? "any" : port.kind === "resource" ? "artifact" : port.kind === "event" ? "event" : "any",
+        required: true,
+        cardinality: "one" as const,
+      })),
+      outputs: node.ports.filter((port) => port.direction === "output").map((port) => ({
+        portId: port.id,
+        nodeId: port.nodeId,
+        name: port.name,
+        direction: "output" as const,
+        kind: runtimePortKind(port.kind),
+        valueType: port.kind === "data" ? "any" : port.kind === "resource" ? "artifact" : port.kind === "event" ? "event" : "any",
+        required: false,
+        cardinality: "many" as const,
+      })),
+      enabled: true,
+      position: { x: 80 + (index % 3) * 320, y: 145 + Math.floor(index / 3) * 145 },
+    })),
+    edges: canvasEdges.map((edge) => ({
+      edgeId: edge.id,
+      canvasId: edge.canvasId,
+      source: { nodeId: edge.sourceNodeId, portId: edge.sourcePortId },
+      target: { nodeId: edge.targetNodeId, portId: edge.targetPortId },
+      kind: edge.kind === "flow" ? "control" : edge.kind === "resource" ? "data" : edge.kind,
+      enabled: true,
+    })),
+    entrypoints: entrypointId && canvas.defaultEntrypointNodeId
+      ? [{
+        entrypointId,
+        name: "Default",
+        kind: "manual",
+        targetNodeId: canvas.defaultEntrypointNodeId,
+        manualInvocable: true,
+        enabled: true,
+      }]
+      : [],
+    ...(entrypointId ? { defaultEntrypointId: entrypointId } : {}),
+    triggers: [],
+  };
+}
 const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
   if (kind === "trigger.start") return [port(nodeId, "Start", "output", "flow"), port(nodeId, "Event", "output", "event")];
   if (kind === "input.text") return [port(nodeId, "Start", "input", "flow"), port(nodeId, "Text", "output", "data"), port(nodeId, "Complete", "output", "flow")];
@@ -48,13 +130,13 @@ const defaultPorts = (nodeId: string, kind: string): CanvasPort[] => {
 const seed = (): HostSnapshot => {
   const workspace: Workspace = { id: "ws_thesis", name: "Thesis Workspace", path: "D:/Documents/Thesis", updatedAt: now() };
   const canvas: Canvas = { id: "canvas_citation", workspaceId: workspace.id, name: "Citation Review", status: "idle", defaultEntrypointNodeId: null, revision: 3, draftRevision: 0, draftDirty: false, updatedAt: now() };
-  return { snapshotVersion: 1, workspaces: [workspace], canvases: [canvas], nodes: [], edges: [], revisions: [{ id: "rev_citation_3", canvasId: canvas.id, revision: 3, createdAt: now(), createdBy: "user", status: "validated", contentDigest: "sha256:" + "0".repeat(64), graphJson: JSON.stringify({ nodes: [], edges: [] }) }], runs: [], notifications: [] };
+  return { snapshotVersion: 1, workspaces: [workspace], canvases: [canvas], nodes: [], edges: [], revisions: [{ id: "rev_citation_3", canvasId: canvas.id, revision: 3, createdAt: now(), createdBy: "user", status: "validated", contentDigest: legacyDigest, graphJson: JSON.stringify({ nodes: [], edges: [] }) }], runs: [], notifications: [] };
 };
 
 export function createLocalHostClient(): HostClient {
   const stored = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<HostSnapshot> | null;
   let state: HostSnapshot = stored
-    ? { snapshotVersion: stored.snapshotVersion ?? 1, workspaces: stored.workspaces ?? [], canvases: (stored.canvases ?? []).map((canvas) => ({ ...canvas, draftRevision: canvas.draftRevision ?? 0, draftDirty: canvas.draftDirty ?? false })), nodes: (stored.nodes ?? []).map((node) => ({ ...node, ports: node.ports ?? defaultPorts(node.id, node.kind) })), edges: (stored.edges ?? []).map((edge) => ({ ...edge, sourcePortId: edge.sourcePortId ?? "", targetPortId: edge.targetPortId ?? "", kind: edge.kind ?? "data" })), revisions: (stored.revisions ?? []).map((revision) => ({ ...revision, contentDigest: revision.contentDigest ?? "sha256:" + "0".repeat(64), graphJson: revision.graphJson ?? JSON.stringify({ nodes: [], edges: [] }) })), runs: (stored.runs ?? []).map((run) => ({ ...run, finishedAt: run.finishedAt ?? null })), notifications: (stored.notifications ?? []).map((notification) => ({ ...notification, runId: notification.runId ?? null, canvasId: notification.canvasId ?? null })) }
+    ? { snapshotVersion: stored.snapshotVersion ?? 1, workspaces: stored.workspaces ?? [], canvases: (stored.canvases ?? []).map((canvas) => ({ ...canvas, draftRevision: canvas.draftRevision ?? 0, draftDirty: canvas.draftDirty ?? false })), nodes: (stored.nodes ?? []).map((node) => ({ ...node, ports: node.ports ?? defaultPorts(node.id, node.kind) })), edges: (stored.edges ?? []).map((edge) => ({ ...edge, sourcePortId: edge.sourcePortId ?? "", targetPortId: edge.targetPortId ?? "", kind: edge.kind ?? "data" })), revisions: (stored.revisions ?? []).map((revision) => ({ ...revision, contentDigest: revision.contentDigest ?? legacyDigest, graphJson: revision.graphJson ?? JSON.stringify({ nodes: [], edges: [] }) })), runs: (stored.runs ?? []).map((run) => ({ ...run, finishedAt: run.finishedAt ?? null })), notifications: (stored.notifications ?? []).map((notification) => ({ ...notification, runId: notification.runId ?? null, canvasId: notification.canvasId ?? null })) }
     : seed();
   const listeners = new Set<(snapshot: HostSnapshot) => void>();
   let localGlobalPosition = 0;
@@ -161,7 +243,7 @@ export function createLocalHostClient(): HostClient {
     async renameCanvas(id, name) { const item = canvas(id); if (!item) throw new Error("Canvas not found"); item.name = name.trim(); item.updatedAt = now(); commit(); return structuredClone(item); },
     async deleteCanvas(id) { const item = canvas(id); if (!item) throw new Error("Canvas not found"); if (item.status === "running" || item.status === "waiting_input" || state.runs.some((run) => run.canvasId === id && (run.status === "running" || run.status === "waiting_input" || run.status === "queued"))) throw new Error("Cannot delete a canvas while it has an active run."); state.canvases = state.canvases.filter((candidate) => candidate.id !== id); state.nodes = state.nodes.filter((candidate) => candidate.canvasId !== id); state.edges = state.edges.filter((candidate) => candidate.canvasId !== id); state.revisions = state.revisions.filter((candidate) => candidate.canvasId !== id); state.runs = state.runs.filter((candidate) => candidate.canvasId !== id); state.notifications = state.notifications.filter((candidate) => candidate.canvasId !== id); commit(); },
     async setDefaultEntrypoint(canvasId, nodeId) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); if (!state.nodes.some((node) => node.id === nodeId && node.canvasId === canvasId)) throw new Error("Entrypoint node not found"); item.defaultEntrypointNodeId = nodeId; item.draftRevision += 1; item.draftDirty = true; item.updatedAt = now(); commit(); return structuredClone(item); },
-    async saveRevision(canvasId, expectedDraftRevision) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); if (expectedDraftRevision !== undefined && expectedDraftRevision !== item.draftRevision) throw new Error("Draft revision is stale"); item.revision += 1; item.draftDirty = false; item.updatedAt = now(); const graphJson = JSON.stringify({ nodes: state.nodes.filter((node) => node.canvasId === canvasId), edges: state.edges.filter((edge) => edge.canvasId === canvasId) }); const revision: CanvasRevision = { id: uid("revision"), canvasId, revision: item.revision, createdAt: now(), createdBy: "user", status: "debug", contentDigest: "sha256:" + "0".repeat(64), graphJson }; state.revisions.push(revision); commit(); return structuredClone(revision); },
+    async saveRevision(canvasId, expectedDraftRevision) { const item = canvas(canvasId); if (!item) throw new Error("Canvas not found"); if (expectedDraftRevision !== undefined && expectedDraftRevision !== item.draftRevision) throw new Error("Draft revision is stale"); item.revision += 1; item.draftDirty = false; item.updatedAt = now(); const graphJson = JSON.stringify({ nodes: state.nodes.filter((node) => node.canvasId === canvasId), edges: state.edges.filter((edge) => edge.canvasId === canvasId) }); const revision: CanvasRevision = { id: uid("revision"), canvasId, revision: item.revision, createdAt: now(), createdBy: "user", status: "debug", contentDigest: legacyDigest, graphJson }; state.revisions.push(revision); commit(); return structuredClone(revision); },
     async startRun(input) { const item = canvas(input.canvasId); if (!item) throw new Error("Canvas not found"); if (!item.defaultEntrypointNodeId) throw new Error("This canvas has no manual entrypoint. Configure an entrypoint before running."); if (input.revision !== item.revision) throw new Error("Revision is stale"); if (item.status === "running" || item.status === "waiting_input") throw new Error("A run is already active or waiting for input"); const unsupported = state.nodes.find((node) => node.canvasId === item.id && !["trigger.start", "input.text", "task.manual", "output.text"].includes(node.kind)); if (unsupported) throw new Error(`Node kind ${unsupported.kind} is not executable in this MVP`); const run: Run = { id: uid("run"), canvasId: item.id, revision: input.revision, status: "running", startedAt: now(), finishedAt: null, currentNodeId: null, inputPrompt: null, result: null, completedNodeIds: [] }; item.status = "running"; state.runs.unshift(run); commit(); window.setTimeout(() => { const current = state.runs.find((candidate) => candidate.id === run.id); const currentCanvas = canvas(item.id); if (!current || !currentCanvas || current.status !== "running") return; const next = firstInteractiveNode(item.id, current.completedNodeIds ?? []); if (next) { current.status = "waiting_input"; current.currentNodeId = next.node.id; current.inputPrompt = next.prompt; currentCanvas.status = "waiting_input"; } else { try { current.result = resolveTextOutput(item.id) ?? null; current.status = "succeeded"; current.finishedAt = now(); currentCanvas.status = "succeeded"; } catch (error) { current.status = "failed"; current.inputPrompt = error instanceof Error ? error.message : "Text Output could not resolve its input."; current.finishedAt = now(); currentCanvas.status = "failed"; } } commit(); }, 80); return structuredClone(run); },
     async submitRunInput(input) { const run = state.runs.find((candidate) => candidate.id === input.runId); if (!run) throw new Error("Run not found"); if (run.status !== "waiting_input") throw new Error("This run is not waiting for input"); const item = canvas(run.canvasId); if (!item) throw new Error("Canvas not found"); if (!input.value.trim()) throw new Error("A result value is required"); const submittedNodeName = run.currentNodeId ? state.nodes.find((node) => node.id === run.currentNodeId)?.name ?? "Interactive task" : "Interactive task"; run.result = input.value.trim(); if (run.currentNodeId && !(run.completedNodeIds ?? []).includes(run.currentNodeId)) run.completedNodeIds = [...(run.completedNodeIds ?? []), run.currentNodeId]; const next = firstInteractiveNode(item.id, run.completedNodeIds ?? []); if (next) { run.status = "waiting_input"; run.currentNodeId = next.node.id; run.inputPrompt = next.prompt; item.status = "waiting_input"; } else { run.status = "succeeded"; run.finishedAt = now(); run.currentNodeId = null; run.inputPrompt = null; item.status = "succeeded"; } const notification: Notification = { id: uid("notification"), title: next ? "Run waiting for input" : "Run completed", message: next ? `${item.name} is waiting for a local input: ${run.inputPrompt}.` : `${submittedNodeName} received your submission. ${item.name} run completed successfully.`, severity: next ? "info" : "success", createdAt: now(), canvasId: item.id, runId: run.id }; state.notifications.unshift(notification); commit(); return structuredClone(run); },
     events: async (afterGlobalPosition, limit = 100) => { const next = afterGlobalPosition < localGlobalPosition ? Math.min(localGlobalPosition, afterGlobalPosition + Math.max(1, limit)) : afterGlobalPosition; return { events: next > afterGlobalPosition ? [{ eventId: uid("event"), eventType: "projection.snapshot.updated" as const, globalPosition: next, snapshotVersion: state.snapshotVersion, occurredAt: now() }] : [], nextGlobalPosition: next, snapshotVersion: state.snapshotVersion }; },
